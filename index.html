@@ -10,7 +10,7 @@
 
   <body>
     <main class="shell">
-      <section class="topbar" aria-label="Mission overview">
+      <section id="top" class="topbar" aria-label="Mission overview">
         <div>
           <p class="eyebrow">dev interface</p>
           <h1>Agent Mission Control</h1>
@@ -21,22 +21,10 @@
         </div>
       </section>
 
-      <section class="overview-grid" aria-label="Agent summary">
-        <article class="metric">
-          <span class="metric-label">Active agents</span>
-          <strong>0</strong>
-        </article>
-        <article class="metric">
-          <span class="metric-label">Working</span>
-          <strong>0</strong>
-        </article>
-        <article class="metric">
-          <span class="metric-label">24h estimated spend</span>
-          <strong>$0.00</strong>
-        </article>
+      <section id="metrics" class="overview-grid" aria-label="Agent summary">
       </section>
 
-      <section class="empty-panel" aria-label="No active sessions">
+      <section id="empty-state" class="empty-panel" aria-label="No active sessions">
         <div class="panel-header">
           <span>Sessions</span>
           <span class="panel-state">waiting for events</span>
@@ -55,6 +43,13 @@
           </ul>
         </div>
       </section>
+
+      <section
+        id="session-grid"
+        class="session-grid"
+        aria-label="Active agent sessions"
+        hidden
+      ></section>
     </main>
   </body>
 </html>
