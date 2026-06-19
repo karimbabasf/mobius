@@ -6,7 +6,9 @@ node_modules/
 src-tauri/gen/
 
 # Local planning, process notes, and verification artifacts.
-docs/
+docs/*
+!docs/ARCHITECTURE.md
+!docs/PROJECT_CONTEXT.md
 tests/
 coverage/
 .superpowers/
