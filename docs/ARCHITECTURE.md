@@ -53,9 +53,10 @@ agent-mission-control/
 - `collector/adapters/claude.rs`: pure `parse_session(path)` for a Claude Code log —
   tokens, model, branch, file-activity log, current action, and a derived title.
 - `collector/adapters/codex.rs`: best-effort `parse_session(path)` for a Codex rollout
-  log, plus `load_thread_names(index)` for the session id → name join.
-- `collector/mod.rs`: `Collector` scans both agent log trees, caches parsed sessions by
-  file mtime, computes live status, merges, and sorts newest-first.
+  log, plus `load_thread_names(index)` for the session id → name join. Scanned across
+  every Codex home — `~/.codex` and isolated profiles like `~/.codex-karim`.
+- `collector/mod.rs`: `Collector` scans the Claude tree and every Codex home, caches
+  parsed sessions by file mtime, computes live status, merges, and sorts newest-first.
 - `lib.rs`: Tauri app; exposes `get_sessions` returning `Collector::snapshot(now)`.
 - `src/components/*`: pure string renderers (card, file log, tool logo, top bar).
 - `src/main.ts`: polls `get_sessions` and reconciles cards by session id so new agents

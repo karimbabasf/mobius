@@ -2,7 +2,7 @@ pub mod adapters;
 pub mod registry;
 pub mod session;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -28,10 +28,12 @@ struct CacheEntry {
 /// `snapshot` re-scans the agent log directories on each call and returns the
 /// sessions that are currently active. Parsed sessions are cached per file and
 /// only re-parsed when the file's mtime changes, so an idle dashboard does no work.
+/// Codex is scanned across multiple homes (the default profile plus isolated
+/// profiles such as `~/.codex-karim`); their session-name indexes are merged.
 pub struct Collector {
     claude_dir: PathBuf,
-    codex_dir: PathBuf,
-    codex_index: PathBuf,
+    codex_dirs: Vec<PathBuf>,
+    codex_indexes: Vec<PathBuf>,
     active_window_ms: i64,
     cache: Mutex<HashMap<PathBuf, CacheEntry>>,
 }
@@ -39,34 +41,50 @@ pub struct Collector {
 impl Collector {
     pub fn new() -> Self {
         let home = dirs::home_dir().unwrap_or_default();
-        Self::with_dirs(
+        Self::build(
             home.join(".claude").join("projects"),
-            home.join(".codex").join("sessions"),
-            home.join(".codex").join("session_index.jsonl"),
+            vec![
+                home.join(".codex").join("sessions"),
+                home.join(".codex-karim").join("sessions"),
+            ],
+            vec![
+                home.join(".codex").join("session_index.jsonl"),
+                home.join(".codex-karim").join("session_index.jsonl"),
+            ],
             DEFAULT_ACTIVE_WINDOW_MS,
         )
     }
 
     /// Claude-only collector (used by tests that should not see local Codex logs).
     pub fn with_claude_dir(claude_dir: PathBuf, active_window_ms: i64) -> Self {
-        Self::with_dirs(
-            claude_dir,
-            PathBuf::from("/nonexistent-amc-codex"),
-            PathBuf::from("/nonexistent-amc-codex-index"),
-            active_window_ms,
-        )
+        Self::build(claude_dir, Vec::new(), Vec::new(), active_window_ms)
     }
 
+    /// Single-Codex-home collector (test helper).
     pub fn with_dirs(
         claude_dir: PathBuf,
         codex_dir: PathBuf,
         codex_index: PathBuf,
         active_window_ms: i64,
     ) -> Self {
+        Self::build(
+            claude_dir,
+            vec![codex_dir],
+            vec![codex_index],
+            active_window_ms,
+        )
+    }
+
+    fn build(
+        claude_dir: PathBuf,
+        codex_dirs: Vec<PathBuf>,
+        codex_indexes: Vec<PathBuf>,
+        active_window_ms: i64,
+    ) -> Self {
         Self {
             claude_dir,
-            codex_dir,
-            codex_index,
+            codex_dirs,
+            codex_indexes,
             active_window_ms,
             cache: Mutex::new(HashMap::new()),
         }
@@ -80,25 +98,34 @@ impl Collector {
         for (path, mtime) in claude_files {
             files.push((path, mtime, Source::Claude));
         }
-        let mut codex_files = Vec::new();
-        collect_active_jsonl(&self.codex_dir, now_ms, self.active_window_ms, &mut codex_files);
-        for (path, mtime) in codex_files {
-            files.push((path, mtime, Source::Codex));
+        for dir in &self.codex_dirs {
+            let mut codex_files = Vec::new();
+            collect_active_jsonl(dir, now_ms, self.active_window_ms, &mut codex_files);
+            for (path, mtime) in codex_files {
+                files.push((path, mtime, Source::Codex));
+            }
         }
 
-        // Codex stores session names out-of-band; load them once if any Codex file is active.
+        // Codex stores session names out-of-band; merge every home's index if any
+        // Codex file is active (session ids are globally unique, so merging is safe).
         let thread_names = if files.iter().any(|(_, _, source)| matches!(source, Source::Codex)) {
-            codex::load_thread_names(&self.codex_index)
+            let mut names = HashMap::new();
+            for index in &self.codex_indexes {
+                for (id, name) in codex::load_thread_names(index) {
+                    names.insert(id, name);
+                }
+            }
+            names
         } else {
             HashMap::new()
         };
 
         let mut cache = self.cache.lock().expect("collector cache lock");
-        let active: std::collections::HashSet<PathBuf> =
-            files.iter().map(|(path, _, _)| path.clone()).collect();
+        let active: HashSet<PathBuf> = files.iter().map(|(path, _, _)| path.clone()).collect();
         cache.retain(|path, _| active.contains(path));
 
         let mut sessions = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
         for (path, mtime, source) in files {
             let needs_parse = match cache.get(&path) {
                 Some(entry) => entry.mtime != mtime,
@@ -120,16 +147,20 @@ impl Collector {
                 continue;
             };
             let age = now_ms - entry.session.last_event_at;
-            if let Some(status) = status_for_age(age, self.active_window_ms) {
-                let mut session = entry.session.clone();
-                session.status = status;
-                if matches!(session.tool, Tool::Codex) {
-                    if let Some(name) = thread_names.get(&session.id) {
-                        session.title = Some(name.clone());
-                    }
-                }
-                sessions.push(session);
+            let Some(status) = status_for_age(age, self.active_window_ms) else {
+                continue;
+            };
+            let mut session = entry.session.clone();
+            if !seen.insert(session.id.clone()) {
+                continue;
             }
+            session.status = status;
+            if matches!(session.tool, Tool::Codex) {
+                if let Some(name) = thread_names.get(&session.id) {
+                    session.title = Some(name.clone());
+                }
+            }
+            sessions.push(session);
         }
 
         sessions.sort_by(|a, b| b.last_event_at.cmp(&a.last_event_at));
@@ -244,5 +275,25 @@ mod tests {
             .expect("codex session should be present");
         assert!(matches!(found.tool, Tool::Codex));
         assert_eq!(found.title.as_deref(), Some("Build the thing"));
+    }
+
+    #[test]
+    fn snapshot_deduplicates_codex_sessions_across_homes() {
+        let codex_dir = codex_fixtures();
+        // Two Codex homes pointing at the same logs must not double-count a session.
+        let collector = Collector::build(
+            PathBuf::from("/nonexistent-claude"),
+            vec![codex_dir.clone(), codex_dir.clone()],
+            vec![codex_dir.join("session_index.jsonl")],
+            DEFAULT_ACTIVE_WINDOW_MS,
+        );
+        let base = codex::parse_session(&codex_dir.join("rollout-sample.jsonl")).unwrap();
+        let now = base.last_event_at + 30_000;
+        let count = collector
+            .snapshot(now)
+            .iter()
+            .filter(|s| s.id == "codex-1")
+            .count();
+        assert_eq!(count, 1);
     }
 }

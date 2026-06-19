@@ -20,6 +20,9 @@ Short log of meaningful, hard-to-reverse choices. Newest first.
   token log; a partial card would mislead. The adapter layer is pluggable for it later.
 - **Codex tokens are best-effort.** Codex `token_count` payloads frequently carry a null
   `info`, so token totals may be 0. We read them when present and never block on them.
+- **Multiple Codex homes.** The collector scans every Codex profile — the default
+  `~/.codex` plus isolated profiles like `~/.codex-karim` (the "karimscodex" instance) —
+  merging their `session_index.jsonl` name maps and de-duplicating sessions by id.
 - **Privacy:** the app only reads local agent logs and never sends anything off the
   machine. v1 is observe-only — it never controls, pauses, or modifies agents.
 - **Repo hygiene:** `tests/fixtures/` and `docs/{DECISIONS,KANBAN}.md` are force-tracked

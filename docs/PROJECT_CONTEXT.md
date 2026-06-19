@@ -25,7 +25,7 @@ When these disagree, treat the design spec as the product source of truth, then 
 
 - Tauri v2 + Vite/TypeScript app launches and shows **live** local agents.
 - The collector reads real logs: Claude Code (`~/.claude/projects`) fully, Codex
-  (`~/.codex`) best-effort. Cursor is deferred.
+  (`~/.codex` and the isolated `~/.codex-karim` profile) best-effort. Cursor is deferred.
 - `get_sessions` returns `Collector::snapshot(now)`: currently-active sessions (by file
   mtime) with tokens (in/out/cache), model, branch, a derived name + full session id, live
   status, and a file-activity log. The webview polls every 1.5s and reconciles cards.
