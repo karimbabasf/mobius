@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Mission Control</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="shell">
+      <section class="topbar" aria-label="Mission overview">
+        <div>
+          <p class="eyebrow">dev interface</p>
+          <h1>Agent Mission Control</h1>
+        </div>
+        <div class="status-chip" aria-label="Collector status">
+          <span class="status-dot" aria-hidden="true"></span>
+          collector: standby
+        </div>
+      </section>
+
+      <section class="overview-grid" aria-label="Agent summary">
+        <article class="metric">
+          <span class="metric-label">Active agents</span>
+          <strong>0</strong>
+        </article>
+        <article class="metric">
+          <span class="metric-label">Working</span>
+          <strong>0</strong>
+        </article>
+        <article class="metric">
+          <span class="metric-label">24h estimated spend</span>
+          <strong>$0.00</strong>
+        </article>
+      </section>
+
+      <section class="empty-panel" aria-label="No active sessions">
+        <div class="panel-header">
+          <span>Sessions</span>
+          <span class="panel-state">waiting for events</span>
+        </div>
+        <div class="empty-copy" role="status">
+          <h2>No live sessions detected.</h2>
+          <p>
+            Agent cards will appear here once Claude Code, Codex, or Cursor sends
+            a local event to the collector. Each running agent will show its own
+            tokens and estimated spend.
+          </p>
+          <ul class="signal-list" aria-label="Expected session sources">
+            <li><span></span>Claude Code</li>
+            <li><span></span>Codex</li>
+            <li><span></span>Cursor</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
