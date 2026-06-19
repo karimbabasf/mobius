@@ -23,11 +23,15 @@ When these disagree, treat the design spec as the product source of truth, then 
 
 ## Current State
 
-- Tauri v2 + Vite/TypeScript app shell exists and launches.
-- Runtime app-data path helpers exist and point outside the repo.
-- Shared `AgentSession`, `Tool`, `Status`, and `Tokens` model exists in Rust.
-- AMC-040 is implemented: one seeded fake Claude session flows through a Tauri `get_sessions` command into a visible UI card.
-- `docs/ARCHITECTURE.md` maps the current app structure.
+- Tauri v2 + Vite/TypeScript app launches and shows **live** local agents.
+- The collector reads real logs: Claude Code (`~/.claude/projects`) fully, Codex
+  (`~/.codex`) best-effort. Cursor is deferred.
+- `get_sessions` returns `Collector::snapshot(now)`: currently-active sessions (by file
+  mtime) with tokens (in/out/cache), model, branch, a derived name + full session id, live
+  status, and a file-activity log. The webview polls every 1.5s and reconciles cards.
+- No dollar cost — token counts only. Observe-only. See `docs/DECISIONS.md`.
+- Tests: `cargo test` (26) and `npm test` (10) green; `tsc` clean.
+- `docs/ARCHITECTURE.md` maps the structure; `docs/KANBAN.md` tracks the slices.
 
 ## Product Goal
 
@@ -142,3 +146,12 @@ Keep this file short. Link to detailed docs instead of copying everything here.
 - Added an in-memory registry and `get_sessions` Tauri command seeded with one fake Claude session.
 - Added vanilla TypeScript renderers for the top metrics and first session card.
 - Added `docs/ARCHITECTURE.md` as the current project map.
+
+### 2026-06-19 - Live data slice (AMC-050 … AMC-070)
+
+- Extended the model with file-activity events and a session title; dropped dollar cost.
+- Built the live Claude adapter and a best-effort Codex adapter; the `Collector` scans the
+  real agent logs, caches parsed sessions by file mtime, and applies liveness.
+- Redesigned the card: per-tool logo, name + full session id, In/Out/Cache token split, and
+  a live file-activity log. The webview polls `get_sessions` every 1.5s.
+- Verified against real data — this very build session shows up in its own dashboard.

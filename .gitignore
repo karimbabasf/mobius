@@ -9,6 +9,8 @@ src-tauri/gen/
 docs/*
 !docs/ARCHITECTURE.md
 !docs/PROJECT_CONTEXT.md
+!docs/DECISIONS.md
+!docs/KANBAN.md
 tests/*
 !tests/fixtures/
 coverage/
