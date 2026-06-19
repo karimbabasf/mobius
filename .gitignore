@@ -1,0 +1,12 @@
+target/
+dist/
+node_modules/
+*.local
+.DS_Store
+src-tauri/gen/
+
+# Local planning, process notes, and verification artifacts.
+docs/
+tests/
+coverage/
+.superpowers/
