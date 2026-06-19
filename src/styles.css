@@ -176,6 +176,25 @@ h2 {
   gap: 14px;
 }
 
+.card-wrapper {
+  min-width: 0;
+}
+
+.card-wrapper--enter {
+  animation: card-enter 0.34s ease both;
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .agent-card {
   min-height: 290px;
   padding: 18px;
@@ -403,4 +422,171 @@ h2 {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+/* AMC-053: tool logo, session identity, token split, and file-activity log */
+.tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.tool-logo {
+  display: inline-flex;
+  align-items: center;
+}
+
+.agent-card[data-tool="claude"] .tool-logo {
+  color: var(--cyan);
+}
+
+.agent-card[data-tool="codex"] .tool-logo {
+  color: var(--blue);
+}
+
+.agent-card[data-tool="cursor"] .tool-logo {
+  color: var(--green);
+}
+
+.agent-id-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-id {
+  font-size: 0.7rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.agent-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.token-row {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.token-row div {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  background: rgba(5, 6, 8, 0.32);
+  text-align: center;
+}
+
+.token-row dt {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.token-row dd {
+  margin: 5px 0 0;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-log-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-log__header {
+  color: var(--blue);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.file-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid #131a22;
+}
+
+.file-row:first-child {
+  border-top: none;
+}
+
+.file-tag {
+  flex: none;
+  min-width: 78px;
+  text-align: center;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.file-tag--reading {
+  color: #7aa7ff;
+  border-color: rgba(122, 167, 255, 0.5);
+  background: rgba(122, 167, 255, 0.08);
+}
+
+.file-tag--writing {
+  color: #55f28f;
+  border-color: rgba(85, 242, 143, 0.5);
+  background: rgba(85, 242, 143, 0.07);
+}
+
+.file-tag--editing {
+  color: #27d7ff;
+  border-color: rgba(39, 215, 255, 0.5);
+  background: rgba(39, 215, 255, 0.08);
+}
+
+.file-tag--appending {
+  color: #ffcc66;
+  border-color: rgba(255, 204, 102, 0.5);
+  background: rgba(255, 204, 102, 0.08);
+}
+
+.file-tag--running {
+  color: #b59bff;
+  border-color: rgba(181, 155, 255, 0.5);
+  background: rgba(181, 155, 255, 0.08);
+}
+
+.file-tag--searching {
+  color: #85949e;
+  border-color: rgba(133, 148, 158, 0.5);
+  background: rgba(133, 148, 158, 0.08);
+}
+
+.file-name {
+  color: var(--text);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.file-log__empty {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: italic;
 }

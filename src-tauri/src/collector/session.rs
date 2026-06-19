@@ -27,6 +27,25 @@ pub struct Tokens {
     pub cache: u64,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileAction {
+    Reading,
+    Writing,
+    Editing,
+    Appending,
+    Running,
+    Searching,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEvent {
+    pub path: String,
+    pub action: FileAction,
+    pub at: i64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSession {
@@ -41,7 +60,8 @@ pub struct AgentSession {
     pub started_at: i64,
     pub last_event_at: i64,
     pub tokens: Tokens,
-    pub cost_usd: Option<f64>,
+    pub title: Option<String>,
+    pub recent_files: Vec<FileEvent>,
 }
 
 impl AgentSession {
@@ -73,7 +93,12 @@ mod tests {
             started_at: 0,
             last_event_at: 1000,
             tokens: Tokens::default(),
-            cost_usd: Some(0.0),
+            title: Some("demo session".into()),
+            recent_files: vec![FileEvent {
+                path: "/Users/you/project/src/main.rs".into(),
+                action: FileAction::Editing,
+                at: 1000,
+            }],
         }
     }
 
@@ -105,8 +130,28 @@ mod tests {
         assert!(json.contains("\"projectPath\""));
         assert!(json.contains("\"currentAction\""));
         assert!(json.contains("\"lastEventAt\""));
-        assert!(json.contains("\"costUsd\""));
         assert!(json.contains("\"tool\":\"claude\""));
         assert!(json.contains("\"status\":\"working\""));
+    }
+
+    #[test]
+    fn file_event_serializes_to_camel_case_for_ui() {
+        let event = FileEvent {
+            path: "/tmp/notes.rs".into(),
+            action: FileAction::Appending,
+            at: 42,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"path\":\"/tmp/notes.rs\""));
+        assert!(json.contains("\"action\":\"appending\""));
+        assert!(json.contains("\"at\":42"));
+    }
+
+    #[test]
+    fn session_serializes_recent_files_and_title_without_cost() {
+        let json = serde_json::to_string(&sample()).unwrap();
+        assert!(json.contains("\"recentFiles\""));
+        assert!(json.contains("\"title\""));
+        assert!(!json.contains("costUsd"), "cost was dropped: {json}");
     }
 }
