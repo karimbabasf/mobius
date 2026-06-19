@@ -31,7 +31,8 @@ fn seeded_sessions() -> Vec<AgentSession> {
             output: 320,
             cache: 640,
         },
-        cost_usd: Some(0.08),
+        title: Some("demo session".into()),
+        recent_files: vec![],
     }]
 }
 

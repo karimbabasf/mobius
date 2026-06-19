@@ -64,7 +64,8 @@ mod tests {
                 output: 320,
                 cache: 640,
             },
-            cost_usd: Some(0.08),
+            title: Some("demo".into()),
+            recent_files: vec![],
         }
     }
 
@@ -104,7 +105,6 @@ mod tests {
 
         assert!(json.contains("\"projectPath\""));
         assert!(json.contains("\"currentAction\""));
-        assert!(json.contains("\"costUsd\""));
         assert!(json.contains("\"status\":\"working\""));
     }
 }

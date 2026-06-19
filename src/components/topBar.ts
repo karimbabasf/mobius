@@ -1,4 +1,5 @@
 import type { AgentSession } from "../types";
+import { formatTokens } from "./format";
 
 function liveSessions(sessions: AgentSession[]): AgentSession[] {
   return sessions.filter(
@@ -6,8 +7,12 @@ function liveSessions(sessions: AgentSession[]): AgentSession[] {
   );
 }
 
-function totalCost(sessions: AgentSession[]): number {
-  return sessions.reduce((sum, session) => sum + (session.costUsd ?? 0), 0);
+function totalTokens(sessions: AgentSession[]): number {
+  return sessions.reduce(
+    (sum, session) =>
+      sum + session.tokens.input + session.tokens.output + session.tokens.cache,
+    0,
+  );
 }
 
 export function renderTopBar(sessions: AgentSession[]): string {
@@ -24,8 +29,8 @@ export function renderTopBar(sessions: AgentSession[]): string {
       <strong>${working}</strong>
     </article>
     <article class="metric">
-      <span class="metric-label">24h estimated spend</span>
-      <strong>$${totalCost(live).toFixed(2)}</strong>
+      <span class="metric-label">Total tokens (live)</span>
+      <strong>${formatTokens(totalTokens(live))}</strong>
     </article>
   `;
 }

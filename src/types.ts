@@ -8,10 +8,24 @@ export type Status =
   | "ended"
   | "dead";
 
+export type FileAction =
+  | "reading"
+  | "writing"
+  | "editing"
+  | "appending"
+  | "running"
+  | "searching";
+
 export interface Tokens {
   input: number;
   output: number;
   cache: number;
+}
+
+export interface FileEvent {
+  path: string;
+  action: FileAction;
+  at: number;
 }
 
 export interface AgentSession {
@@ -26,5 +40,6 @@ export interface AgentSession {
   startedAt: number;
   lastEventAt: number;
   tokens: Tokens;
-  costUsd: number | null;
+  title: string | null;
+  recentFiles: FileEvent[];
 }

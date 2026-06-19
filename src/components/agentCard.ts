@@ -1,4 +1,5 @@
 import type { AgentSession, Status, Tool } from "../types";
+import { basename, escapeHtml, formatTokens } from "./format";
 
 const toolLabels: Record<Tool, string> = {
   claude: "Claude Code",
@@ -15,37 +16,13 @@ const statusLabels: Record<Status, string> = {
   dead: "dead",
 };
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function basename(path: string): string {
-  const trimmed = path.replace(/\/+$/, "");
-  return trimmed.split("/").pop() || trimmed || "unknown project";
-}
-
-function formatTokens(total: number): string {
-  if (total >= 1000) {
-    return `${(total / 1000).toFixed(1)}k`;
-  }
-  return String(total);
-}
-
-function formatCost(value: number | null): string {
-  return value === null ? "n/a (subscription)" : `$${value.toFixed(2)}`;
-}
-
 export function renderCard(session: AgentSession): string {
   const totalTokens =
     session.tokens.input + session.tokens.output + session.tokens.cache;
   const action = session.currentAction ?? "standing by";
   const branch = session.branch ?? "branch unknown";
   const model = session.model ?? "model unknown";
+  const name = session.title ?? basename(session.projectPath);
 
   return `
     <article class="agent-card" data-tool="${session.tool}">
@@ -56,7 +33,7 @@ export function renderCard(session: AgentSession): string {
         </span>
       </div>
       <div>
-        <h2>${escapeHtml(basename(session.projectPath))}</h2>
+        <h2>${escapeHtml(name)}</h2>
         <p class="agent-path">${escapeHtml(session.projectPath)}</p>
       </div>
       <dl class="agent-facts">
@@ -71,10 +48,6 @@ export function renderCard(session: AgentSession): string {
         <div>
           <dt>Tokens</dt>
           <dd>${formatTokens(totalTokens)}</dd>
-        </div>
-        <div>
-          <dt>Cost</dt>
-          <dd>${escapeHtml(formatCost(session.costUsd))}</dd>
         </div>
       </dl>
       <p class="agent-action">${escapeHtml(action)}</p>
