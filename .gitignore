@@ -9,6 +9,7 @@ src-tauri/gen/
 docs/*
 !docs/ARCHITECTURE.md
 !docs/PROJECT_CONTEXT.md
-tests/
+tests/*
+!tests/fixtures/
 coverage/
 .superpowers/
