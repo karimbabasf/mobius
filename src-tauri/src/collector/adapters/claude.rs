@@ -140,7 +140,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
 }
 
 /// Last-modified time of a file in epoch milliseconds (0 if unavailable).
-fn file_mtime_ms(path: &Path) -> i64 {
+pub(crate) fn file_mtime_ms(path: &Path) -> i64 {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
@@ -150,7 +150,7 @@ fn file_mtime_ms(path: &Path) -> i64 {
 }
 
 /// Final path segment, e.g. "/a/b/c.rs" -> "c.rs".
-fn basename(path: &str) -> String {
+pub(crate) fn basename(path: &str) -> String {
     let trimmed = path.trim_end_matches('/');
     trimmed
         .rsplit('/')
@@ -239,7 +239,7 @@ fn find_single_redirect(cmd: &str) -> Option<usize> {
 }
 
 /// Classify a shell command into a file action: append/write on redirect, else run.
-fn classify_bash(cmd: &str) -> (FileAction, String) {
+pub(crate) fn classify_bash(cmd: &str) -> (FileAction, String) {
     if let Some(idx) = cmd.find(">>") {
         if let Some(file) = redirect_target(&cmd[idx + 2..]) {
             return (FileAction::Appending, file);
@@ -282,7 +282,7 @@ fn file_event_for_tool(name: &str, input: &Value, at: i64) -> Option<FileEvent> 
 }
 
 /// One-line "Editing styles.css" style phrase for the most recent activity.
-fn action_phrase(event: &FileEvent) -> String {
+pub(crate) fn action_phrase(event: &FileEvent) -> String {
     let verb = match event.action {
         FileAction::Reading => "Reading",
         FileAction::Writing => "Writing",

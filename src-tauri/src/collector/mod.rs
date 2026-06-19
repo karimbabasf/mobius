@@ -6,11 +6,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::collector::adapters::claude;
-use crate::collector::session::{AgentSession, Status};
+use crate::collector::adapters::{claude, codex};
+use crate::collector::session::{AgentSession, Status, Tool};
 
 const DEFAULT_ACTIVE_WINDOW_MS: i64 = 10 * 60 * 1000;
 const WORKING_RECENCY_MS: i64 = 90 * 1000;
+
+#[derive(Clone, Copy)]
+enum Source {
+    Claude,
+    Codex,
+}
 
 struct CacheEntry {
     mtime: i64,
@@ -24,6 +30,8 @@ struct CacheEntry {
 /// only re-parsed when the file's mtime changes, so an idle dashboard does no work.
 pub struct Collector {
     claude_dir: PathBuf,
+    codex_dir: PathBuf,
+    codex_index: PathBuf,
     active_window_ms: i64,
     cache: Mutex<HashMap<PathBuf, CacheEntry>>,
 }
@@ -31,15 +39,34 @@ pub struct Collector {
 impl Collector {
     pub fn new() -> Self {
         let home = dirs::home_dir().unwrap_or_default();
-        Self::with_claude_dir(
+        Self::with_dirs(
             home.join(".claude").join("projects"),
+            home.join(".codex").join("sessions"),
+            home.join(".codex").join("session_index.jsonl"),
             DEFAULT_ACTIVE_WINDOW_MS,
         )
     }
 
+    /// Claude-only collector (used by tests that should not see local Codex logs).
     pub fn with_claude_dir(claude_dir: PathBuf, active_window_ms: i64) -> Self {
+        Self::with_dirs(
+            claude_dir,
+            PathBuf::from("/nonexistent-amc-codex"),
+            PathBuf::from("/nonexistent-amc-codex-index"),
+            active_window_ms,
+        )
+    }
+
+    pub fn with_dirs(
+        claude_dir: PathBuf,
+        codex_dir: PathBuf,
+        codex_index: PathBuf,
+        active_window_ms: i64,
+    ) -> Self {
         Self {
             claude_dir,
+            codex_dir,
+            codex_index,
             active_window_ms,
             cache: Mutex::new(HashMap::new()),
         }
@@ -47,23 +74,42 @@ impl Collector {
 
     /// Active sessions right now, newest activity first.
     pub fn snapshot(&self, now_ms: i64) -> Vec<AgentSession> {
-        let mut files = Vec::new();
-        collect_active_jsonl(&self.claude_dir, now_ms, self.active_window_ms, &mut files);
+        let mut files: Vec<(PathBuf, i64, Source)> = Vec::new();
+        let mut claude_files = Vec::new();
+        collect_active_jsonl(&self.claude_dir, now_ms, self.active_window_ms, &mut claude_files);
+        for (path, mtime) in claude_files {
+            files.push((path, mtime, Source::Claude));
+        }
+        let mut codex_files = Vec::new();
+        collect_active_jsonl(&self.codex_dir, now_ms, self.active_window_ms, &mut codex_files);
+        for (path, mtime) in codex_files {
+            files.push((path, mtime, Source::Codex));
+        }
+
+        // Codex stores session names out-of-band; load them once if any Codex file is active.
+        let thread_names = if files.iter().any(|(_, _, source)| matches!(source, Source::Codex)) {
+            codex::load_thread_names(&self.codex_index)
+        } else {
+            HashMap::new()
+        };
 
         let mut cache = self.cache.lock().expect("collector cache lock");
-        // Forget files that are no longer active so the cache cannot grow unbounded.
         let active: std::collections::HashSet<PathBuf> =
-            files.iter().map(|(path, _)| path.clone()).collect();
+            files.iter().map(|(path, _, _)| path.clone()).collect();
         cache.retain(|path, _| active.contains(path));
 
         let mut sessions = Vec::new();
-        for (path, mtime) in files {
+        for (path, mtime, source) in files {
             let needs_parse = match cache.get(&path) {
                 Some(entry) => entry.mtime != mtime,
                 None => true,
             };
             if needs_parse {
-                match claude::parse_session(&path) {
+                let parsed = match source {
+                    Source::Claude => claude::parse_session(&path),
+                    Source::Codex => codex::parse_session(&path),
+                };
+                match parsed {
                     Some(session) => {
                         cache.insert(path.clone(), CacheEntry { mtime, session });
                     }
@@ -77,6 +123,11 @@ impl Collector {
             if let Some(status) = status_for_age(age, self.active_window_ms) {
                 let mut session = entry.session.clone();
                 session.status = status;
+                if matches!(session.tool, Tool::Codex) {
+                    if let Some(name) = thread_names.get(&session.id) {
+                        session.title = Some(name.clone());
+                    }
+                }
                 sessions.push(session);
             }
         }
@@ -134,8 +185,12 @@ fn collect_active_jsonl(dir: &Path, now_ms: i64, window_ms: i64, out: &mut Vec<(
 mod tests {
     use super::*;
 
-    fn fixtures_dir() -> PathBuf {
+    fn claude_fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/claude")
+    }
+
+    fn codex_fixtures() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/codex")
     }
 
     #[test]
@@ -151,8 +206,8 @@ mod tests {
 
     #[test]
     fn snapshot_shows_recent_session_as_working() {
-        let collector = Collector::with_claude_dir(fixtures_dir(), DEFAULT_ACTIVE_WINDOW_MS);
-        let base = claude::parse_session(&fixtures_dir().join("session-basic.jsonl")).unwrap();
+        let collector = Collector::with_claude_dir(claude_fixtures(), DEFAULT_ACTIVE_WINDOW_MS);
+        let base = claude::parse_session(&claude_fixtures().join("session-basic.jsonl")).unwrap();
         let now = base.last_event_at + 30_000;
         let sessions = collector.snapshot(now);
         let found = sessions
@@ -164,10 +219,30 @@ mod tests {
 
     #[test]
     fn snapshot_drops_sessions_older_than_window() {
-        let collector = Collector::with_claude_dir(fixtures_dir(), DEFAULT_ACTIVE_WINDOW_MS);
-        let base = claude::parse_session(&fixtures_dir().join("session-basic.jsonl")).unwrap();
+        let collector = Collector::with_claude_dir(claude_fixtures(), DEFAULT_ACTIVE_WINDOW_MS);
+        let base = claude::parse_session(&claude_fixtures().join("session-basic.jsonl")).unwrap();
         let now = base.last_event_at + 20 * 60 * 1000;
         let sessions = collector.snapshot(now);
         assert!(!sessions.iter().any(|s| s.id == "sess-basic"));
+    }
+
+    #[test]
+    fn snapshot_includes_codex_session_with_thread_name_title() {
+        let codex_dir = codex_fixtures();
+        let collector = Collector::with_dirs(
+            PathBuf::from("/nonexistent-claude"),
+            codex_dir.clone(),
+            codex_dir.join("session_index.jsonl"),
+            DEFAULT_ACTIVE_WINDOW_MS,
+        );
+        let base = codex::parse_session(&codex_dir.join("rollout-sample.jsonl")).unwrap();
+        let now = base.last_event_at + 30_000;
+        let sessions = collector.snapshot(now);
+        let found = sessions
+            .iter()
+            .find(|s| s.id == "codex-1")
+            .expect("codex session should be present");
+        assert!(matches!(found.tool, Tool::Codex));
+        assert_eq!(found.title.as_deref(), Some("Build the thing"));
     }
 }
