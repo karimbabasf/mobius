@@ -10,33 +10,34 @@
 
   <body>
     <main class="shell">
-      <section id="top" class="topbar" aria-label="Mission overview">
-        <div>
-          <p class="eyebrow">dev interface</p>
-          <h1>Agent Mission Control</h1>
-        </div>
-        <div class="status-chip" aria-label="Collector status">
+      <header id="top" class="prompt" aria-label="Mission overview">
+        <span class="prompt__line">
+          <span class="prompt__sigil" aria-hidden="true">▸</span>
+          <span class="prompt__cmd">agent-mission-control</span>
+          <span class="prompt__flag">--watch live</span>
+          <span class="prompt__caret" aria-hidden="true">█</span>
+        </span>
+        <span class="status-chip" aria-label="Collector status">
           <span class="status-dot" aria-hidden="true"></span>
           collector: live
-        </div>
-      </section>
+        </span>
+      </header>
 
-      <section id="metrics" class="overview-grid" aria-label="Agent summary">
-      </section>
+      <section id="metrics" class="telemetry" aria-label="Agent summary"></section>
 
       <section id="empty-state" class="empty-panel" aria-label="No active sessions">
         <div class="panel-header">
-          <span>Sessions</span>
-          <span class="panel-state">waiting for events</span>
+          <span>sessions</span>
+          <span class="panel-state">listening</span>
         </div>
         <div class="empty-copy" role="status">
-          <h2>No live sessions detected.</h2>
+          <h2>Waiting for agents.</h2>
           <p>
-            Agent cards will appear here once Claude Code, Codex, or Cursor sends
-            a local event to the collector. Each running agent will show its own
-            tokens and estimated spend.
+            Start Claude Code or Codex and it'll appear here the moment its
+            process comes alive — with live tokens and a running activity log.
+            When you close it, the strip clears itself.
           </p>
-          <ul class="signal-list" aria-label="Expected session sources">
+          <ul class="signal-list" aria-label="Watched sources">
             <li><span></span>Claude Code</li>
             <li><span></span>Codex</li>
             <li><span></span>Cursor</li>
@@ -46,7 +47,7 @@
 
       <section
         id="session-grid"
-        class="session-grid"
+        class="session-list"
         aria-label="Active agent sessions"
         hidden
       ></section>

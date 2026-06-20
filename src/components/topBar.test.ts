@@ -22,25 +22,29 @@ function session(partial: Partial<AgentSession>): AgentSession {
 }
 
 describe("renderTopBar", () => {
-  it("counts active and working agents, excluding ended", () => {
+  // Every session reaching the UI is a live process now; terminated ones are
+  // gated out in the backend, so the strip just counts what it's given.
+  it("counts active and working agents", () => {
     const html = renderTopBar([
       session({ status: "working" }),
+      session({ status: "working" }),
       session({ status: "idle" }),
-      session({ status: "ended" }),
     ]);
 
-    expect(html).toContain("Active agents");
-    expect(html).toContain("Working");
+    expect(html).toContain("active");
+    expect(html).toContain("working");
+    // 3 active, 2 working.
+    expect(html).toContain("<strong>3</strong>");
+    expect(html).toContain("<strong>2</strong>");
   });
 
-  it("sums total live tokens across active sessions only", () => {
+  it("sums total tokens across the shown sessions", () => {
     const html = renderTopBar([
       session({ status: "working", tokens: { input: 1000, output: 500, cache: 200 } }),
       session({ status: "idle", tokens: { input: 300, output: 0, cache: 0 } }),
-      session({ status: "ended", tokens: { input: 9999, output: 9999, cache: 9999 } }),
     ]);
 
-    expect(html).toContain("Total tokens");
+    expect(html).toContain("tokens");
     expect(html).toContain("2.0k");
   });
 });
