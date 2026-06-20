@@ -80,6 +80,7 @@ export function renderSessions(sessions: AgentSession[]): void {
     }
   }
 
+  let nextNode: ChildNode | null = grid.firstChild;
   for (const session of sessions) {
     let wrapper = wrappers.get(session.id);
     if (!wrapper) {
@@ -89,7 +90,11 @@ export function renderSessions(sessions: AgentSession[]): void {
       wrappers.set(session.id, wrapper);
     }
     paint(wrapper, session);
-    grid.appendChild(wrapper);
+    if (wrapper === nextNode) {
+      nextNode = wrapper.nextSibling;
+    } else {
+      grid.insertBefore(wrapper, nextNode);
+    }
   }
 
   emptyState.hidden = sessions.length > 0;

@@ -15,3 +15,6 @@ tests/*
 !tests/fixtures/
 coverage/
 .superpowers/
+
+# Cline client artifacts
+cline-skills/

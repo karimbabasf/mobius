@@ -143,7 +143,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                             {
                                 // The tool call itself (paths, commands) is conversation.
                                 seg.push(ContextCategory::Conversation, &input.to_string());
-                                if let Some(fe) = file_event_for_tool(name, input, when) {
+                                if let Some(fe) = file_event_for_tool(name, input, ts) {
                                     files.push(fe);
                                 }
                             }
@@ -453,6 +453,16 @@ mod tests {
             .iter()
             .any(|e| matches!(e.action, FileAction::Reading)));
         assert_eq!(s.current_action.as_deref(), Some("Running cargo test"));
+    }
+
+    #[test]
+    fn activity_events_keep_their_transcript_timestamps() {
+        let s = parse_session(&fixture("sess-basic.jsonl")).unwrap();
+        let newest = context::parse_iso8601_ms("2026-06-19T10:00:20.000Z").unwrap();
+        let appended = context::parse_iso8601_ms("2026-06-19T10:00:15.000Z").unwrap();
+
+        assert_eq!(s.recent_files[0].at, newest);
+        assert_eq!(s.recent_files[1].at, appended);
     }
 
     #[test]

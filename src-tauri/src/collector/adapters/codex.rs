@@ -107,7 +107,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                                 if let Ok(parsed) = serde_json::from_str::<Value>(args) {
                                     if let Some(cmd) = parsed.get("cmd").and_then(|v| v.as_str()) {
                                         let (action, target) = classify_bash(cmd);
-                                        files.push(FileEvent { path: target, action, at: when });
+                                        files.push(FileEvent { path: target, action, at: ts });
                                     }
                                 }
                             }
@@ -122,7 +122,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                                     files.push(FileEvent {
                                         path: file_path.clone(),
                                         action,
-                                        at: when,
+                                        at: ts,
                                     });
                                 }
                             }
@@ -322,6 +322,16 @@ mod tests {
             .iter()
             .any(|e| matches!(e.action, FileAction::Running) && e.path.contains("cargo build")));
         assert_eq!(s.current_action.as_deref(), Some("Editing lib.rs"));
+    }
+
+    #[test]
+    fn activity_events_keep_their_transcript_timestamps() {
+        let s = parse_session(&fixture("rollout-sample.jsonl")).unwrap();
+        let edited = context::parse_iso8601_ms("2026-06-19T16:33:55.000Z").unwrap();
+        let running = context::parse_iso8601_ms("2026-06-19T16:33:50.000Z").unwrap();
+
+        assert_eq!(s.recent_files[0].at, edited);
+        assert_eq!(s.recent_files[1].at, running);
     }
 
     #[test]

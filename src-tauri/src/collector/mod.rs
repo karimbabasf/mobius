@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use crate::collector::adapters::{claude, codex};
 use crate::collector::liveness::{ClaudeStatus, LiveClaude};
-use crate::collector::session::{AgentSession, Status, Tool};
+use crate::collector::session::{AgentSession, Status};
 
 const DEFAULT_ACTIVE_WINDOW_MS: i64 = 10 * 60 * 1000;
 const WORKING_RECENCY_MS: i64 = 90 * 1000;
@@ -277,6 +277,7 @@ fn collect_jsonl(dir: &Path, out: &mut Vec<(PathBuf, i64)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collector::session::Tool;
 
     fn claude_fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/claude")
