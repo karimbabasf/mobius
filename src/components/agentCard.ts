@@ -1,5 +1,6 @@
 import type { AgentSession, Status, Tool } from "../types";
 import { basename, escapeHtml, formatTokens } from "./format";
+import { renderContextBar, renderContextDetail } from "./contextGauge";
 import { renderFileLog } from "./fileLog";
 import { renderToolLogo } from "./toolLogo";
 
@@ -26,19 +27,13 @@ const statusLabels: Record<Status, string> = {
  * `aria-expanded`, so the CSS sibling selector handles the reveal and the
  * caller only has to remember which ids are open.
  */
-export function renderCard(
-  session: AgentSession,
-  expanded: boolean,
-  now: number,
-): string {
+export function renderCard(session: AgentSession, expanded: boolean): string {
   const name = session.title ?? basename(session.projectPath);
   const project = basename(session.projectPath);
   const branch = session.branch ?? "—";
   const model = session.model ?? "unknown model";
   const action = session.currentAction ?? "standing by";
   const live = session.status === "working";
-  const total =
-    session.tokens.input + session.tokens.output + session.tokens.cache;
   const pid = session.pid != null ? `pid ${session.pid}` : "pid —";
 
   return `
@@ -56,7 +51,7 @@ export function renderCard(
           statusLabels[session.status],
         )}</span>
         <span class="strip__now">${escapeHtml(action)}</span>
-        <span class="strip__tokens" title="total tokens">${formatTokens(total)}</span>
+        <span class="strip__tokens">${renderContextBar(session)}</span>
       </button>
       <div class="strip__body">
         <div class="strip__body-inner">
@@ -73,12 +68,13 @@ export function renderCard(
             <div><dt>out</dt><dd>${formatTokens(session.tokens.output)}</dd></div>
             <div><dt>cache</dt><dd>${formatTokens(session.tokens.cache)}</dd></div>
           </dl>
+          ${renderContextDetail(session.context)}
           <div class="log">
             <div class="log__head">
               <span>activity log</span>
               <span class="log__count">${session.recentFiles.length}</span>
             </div>
-            ${renderFileLog(session.recentFiles, live, now)}
+            ${renderFileLog(session.recentFiles, live)}
           </div>
         </div>
       </div>

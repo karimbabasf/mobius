@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { renderCard } from "./components/agentCard";
 import { renderTopBar } from "./components/topBar";
+import { formatAgo } from "./components/format";
 import type { AgentSession } from "./types";
 
 const POLL_INTERVAL_MS = 1500;
@@ -22,22 +23,44 @@ const wrappers = new Map<string, HTMLElement>();
 const lastHtml = new Map<string, string>();
 const expandedIds = new Set<string>();
 const latest = new Map<string, AgentSession>();
+let lastTopHtml = "";
 
-function paint(wrapper: HTMLElement, session: AgentSession, now: number): void {
-  const html = renderCard(session, expandedIds.has(session.id), now);
+// The card HTML is deliberately free of per-second values (relative times are
+// empty `data-at` spans filled by `refreshTimes`). That keeps the rendered
+// string stable across polls, so a strip's DOM is only rebuilt when its real
+// data changes — no flashing the whole interface every tick.
+function paint(wrapper: HTMLElement, session: AgentSession): void {
+  const html = renderCard(session, expandedIds.has(session.id));
   if (lastHtml.get(session.id) !== html) {
     wrapper.innerHTML = html;
     lastHtml.set(session.id, html);
   }
+  refreshTimes(wrapper);
+}
+
+/** Update activity-log relative times in place, touching only text nodes — no
+ *  DOM teardown, so this can run every second without any visible flicker. */
+function refreshTimes(scope: ParentNode): void {
+  const now = Date.now();
+  scope.querySelectorAll<HTMLElement>(".log__time[data-at]").forEach((el) => {
+    const at = Number(el.dataset.at);
+    if (!Number.isNaN(at)) {
+      el.textContent = formatAgo(at, now);
+    }
+  });
 }
 
 export function renderSessions(sessions: AgentSession[]): void {
   const metrics = requiredElement<HTMLElement>("#metrics");
   const emptyState = requiredElement<HTMLElement>("#empty-state");
   const grid = requiredElement<HTMLElement>("#session-grid");
-  const now = Date.now();
 
-  metrics.innerHTML = renderTopBar(sessions);
+  // Only touch the telemetry strip when its content actually changed.
+  const topHtml = renderTopBar(sessions);
+  if (topHtml !== lastTopHtml) {
+    metrics.innerHTML = topHtml;
+    lastTopHtml = topHtml;
+  }
 
   latest.clear();
   for (const session of sessions) {
@@ -65,7 +88,7 @@ export function renderSessions(sessions: AgentSession[]): void {
       wrapper.dataset.sessionId = session.id;
       wrappers.set(session.id, wrapper);
     }
-    paint(wrapper, session, now);
+    paint(wrapper, session);
     grid.appendChild(wrapper);
   }
 
@@ -82,7 +105,7 @@ function toggleExpanded(id: string): void {
   const session = latest.get(id);
   const wrapper = wrappers.get(id);
   if (session && wrapper) {
-    paint(wrapper, session, Date.now());
+    paint(wrapper, session);
   }
 }
 
@@ -110,4 +133,6 @@ window.addEventListener("DOMContentLoaded", () => {
 
   void loadSessions();
   window.setInterval(() => void loadSessions(), POLL_INTERVAL_MS);
+  // Keep relative times current without re-rendering any strips.
+  window.setInterval(() => refreshTimes(grid), 1000);
 });

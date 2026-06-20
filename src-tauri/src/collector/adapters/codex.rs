@@ -11,7 +11,11 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::collector::adapters::claude::{action_phrase, basename, classify_bash, file_mtime_ms};
-use crate::collector::session::{AgentSession, FileAction, FileEvent, Status, Tokens, Tool};
+use crate::collector::context::{self, OccupancyRaw, SegmentAccumulator};
+use crate::collector::session::{
+    AgentSession, Compaction, ContextCategory, ContextSnapshot, FileAction, FileEvent, LimitSource,
+    Status, Tokens, Tool,
+};
 
 /// Parse one Codex rollout log into a normalized session (title is provisional;
 /// the collector overrides it with the `thread_name` from the session index).
@@ -25,6 +29,13 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
     let mut tokens = Tokens::default();
     let mut files: Vec<FileEvent> = Vec::new();
 
+    // Context-window reconstruction state (occupancy = the most recent call).
+    let mut occ = OccupancyRaw::default();
+    let mut seg = SegmentAccumulator::default();
+    let mut history: Vec<ContextSnapshot> = Vec::new();
+    let mut compactions: Vec<Compaction> = Vec::new();
+    let mut prev_used: u64 = 0;
+
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -34,6 +45,11 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
             Ok(value) => value,
             Err(_) => continue,
         };
+        let ts = event
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .and_then(context::parse_iso8601_ms)
+            .unwrap_or(when);
         let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let payload = event.get("payload");
         match kind {
@@ -44,6 +60,13 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                     }
                     if cwd.is_none() {
                         cwd = p.get("cwd").and_then(|v| v.as_str()).map(String::from);
+                    }
+                    // Tool schemas are sent once per session; count them once.
+                    if let Some(tools) = p.get("tools").filter(|t| !t.is_null()) {
+                        seg.set_tool_defs_once(&tools.to_string());
+                    }
+                    if let Some(instr) = p.get("instructions").and_then(|v| v.as_str()) {
+                        seg.push(ContextCategory::SystemInstructions, instr);
                     }
                 }
             }
@@ -62,6 +85,14 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                     if p.get("type").and_then(|v| v.as_str()) == Some("token_count") {
                         if let Some(info) = p.get("info").filter(|i| i.is_object()) {
                             add_tokens(&mut tokens, info);
+                            capture_occupancy(
+                                info,
+                                ts,
+                                &mut occ,
+                                &mut history,
+                                &mut compactions,
+                                &mut prev_used,
+                            );
                         }
                     }
                 }
@@ -96,6 +127,20 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                                 }
                             }
                         }
+                        Some("message") => {
+                            let text = message_text(p.get("content"));
+                            let cat = if text.contains("AGENTS.md") {
+                                ContextCategory::Memory
+                            } else {
+                                ContextCategory::Conversation
+                            };
+                            seg.push(cat, &text);
+                        }
+                        Some("function_call_output") => {
+                            if let Some(out) = p.get("output").and_then(|v| v.as_str()) {
+                                seg.push(ContextCategory::FileReads, out);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -110,6 +155,17 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
     files.reverse();
     files.truncate(12);
 
+    // Prefer the in-band `model_context_window`; fall back to a static table.
+    if occ.limit.is_none() {
+        if let Some(m) = &model {
+            occ.limit = context::codex_limit(m);
+            if occ.limit.is_some() {
+                occ.limit_source = LimitSource::ModelTable;
+            }
+        }
+    }
+    let context_window = context::build(occ, &seg, history, compactions, 0, true);
+
     Some(AgentSession {
         id,
         tool: Tool::Codex,
@@ -123,6 +179,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
         started_at: when,
         last_event_at: when,
         tokens,
+        context: Some(context_window),
         recent_files: files,
     })
 }
@@ -151,6 +208,65 @@ pub fn load_thread_names(index_path: &Path) -> HashMap<String, String> {
         }
     }
     names
+}
+
+/// Capture Layer-1 occupancy from a `token_count` payload's `info` object: the
+/// most recent call's prompt size, its cached portion, the reported limit, and a
+/// per-call history point. A large drop in occupancy is recorded as an inferred
+/// compaction (Codex emits no explicit signal).
+fn capture_occupancy(
+    info: &Value,
+    ts: i64,
+    occ: &mut OccupancyRaw,
+    history: &mut Vec<ContextSnapshot>,
+    compactions: &mut Vec<Compaction>,
+    prev_used: &mut u64,
+) {
+    // `last_token_usage` is the prompt size of the most recent call; for older
+    // logs that only carry the cumulative block, fall back to it.
+    let source = info
+        .get("last_token_usage")
+        .or_else(|| info.get("total_token_usage"));
+    if let Some(usage) = source {
+        if let Some(used) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
+            // Inferred compaction: occupancy fell to under 60% of the prior call.
+            if *prev_used > 0 && used < *prev_used * 3 / 5 {
+                compactions.push(Compaction {
+                    at: ts,
+                    pre_tokens: Some(*prev_used),
+                    post_tokens: Some(used),
+                    explicit: false,
+                });
+            }
+            occ.used = used;
+            occ.cached = usage
+                .get("cached_input_tokens")
+                .or_else(|| usage.get("cache_read_input_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            history.push(ContextSnapshot { at: ts, used });
+            *prev_used = used;
+        }
+    }
+    if let Some(window) = info.get("model_context_window").and_then(|v| v.as_u64()) {
+        occ.limit = Some(window);
+        occ.limit_source = LimitSource::Reported;
+    }
+}
+
+/// Flatten a Codex `message` payload's `content` array into plain text.
+fn message_text(content: Option<&Value>) -> String {
+    let Some(Value::Array(blocks)) = content else {
+        return content.and_then(|v| v.as_str()).map(String::from).unwrap_or_default();
+    };
+    let mut out = String::new();
+    for block in blocks {
+        if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+            out.push_str(t);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Best-effort token extraction from a `token_count` payload's `info` object.
@@ -206,6 +322,30 @@ mod tests {
             .iter()
             .any(|e| matches!(e.action, FileAction::Running) && e.path.contains("cargo build")));
         assert_eq!(s.current_action.as_deref(), Some("Editing lib.rs"));
+    }
+
+    #[test]
+    fn context_occupancy_from_last_token_usage_and_window() {
+        let s = parse_session(&fixture("rollout-context.jsonl")).unwrap();
+        let ctx = s.context.expect("context window present");
+        // Occupancy is the last call's `last_token_usage.input_tokens`, and the
+        // limit comes straight from the in-band `model_context_window`.
+        assert_eq!(ctx.used, 70_000);
+        assert_eq!(ctx.cached, 40_000);
+        assert_eq!(ctx.limit, Some(258_400));
+        assert!(matches!(ctx.limit_source, LimitSource::Reported));
+    }
+
+    #[test]
+    fn context_infers_compaction_from_occupancy_drop() {
+        let s = parse_session(&fixture("rollout-context.jsonl")).unwrap();
+        let ctx = s.context.unwrap();
+        assert_eq!(ctx.history.iter().map(|h| h.used).collect::<Vec<_>>(), vec![120_000, 200_000, 70_000]);
+        assert_eq!(ctx.compactions.len(), 1);
+        assert!(!ctx.compactions[0].explicit, "Codex compaction is inferred, not explicit");
+        assert_eq!(ctx.compactions[0].pre_tokens, Some(200_000));
+        let sum: u64 = ctx.categories.iter().map(|c| c.tokens).sum();
+        assert_eq!(sum, ctx.used);
     }
 
     #[test]

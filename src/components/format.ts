@@ -22,6 +22,11 @@ export function formatTokens(total: number): string {
   return String(total);
 }
 
+/** Whole-percent label for a context-fill ratio. */
+export function formatPct(pct: number): string {
+  return `${Math.round(pct)}%`;
+}
+
 /** Compact, terminal-style relative time: "now", "8s", "3m", "2h", "1d". */
 export function formatAgo(at: number, now: number): string {
   const seconds = Math.max(0, Math.round((now - at) / 1000));

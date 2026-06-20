@@ -413,6 +413,192 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
+/* ----- Context-window gauge (header) ----- */
+/* Zone accent, resolved from data-zone; used by both the bar fill and labels. */
+.ctx[data-zone="ok"] {
+  --ctx: var(--green);
+}
+.ctx[data-zone="warn"] {
+  --ctx: var(--amber);
+}
+.ctx[data-zone="high"] {
+  --ctx: #ff9a52;
+}
+.ctx[data-zone="crit"] {
+  --ctx: var(--danger);
+}
+.ctx[data-zone="unknown"] {
+  --ctx: var(--past);
+}
+
+.strip__tokens-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: end;
+}
+
+.ctx__bar {
+  position: relative;
+  width: 64px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.ctx[data-zone="unknown"] .ctx__bar {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--line),
+    var(--line) 4px,
+    var(--panel-soft) 4px,
+    var(--panel-soft) 8px
+  );
+}
+
+.ctx__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--ctx);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.ctx__label {
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ----- Context-window breakdown (expanded body) ----- */
+.ctx-detail {
+  margin-top: 12px;
+}
+
+.ctx-detail__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--accent);
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ctx-detail__split {
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ctx-seg-bar {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  margin-top: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.ctx-seg {
+  height: 100%;
+  background: var(--seg, var(--past));
+}
+
+/* Per-category hues, shared by the segmented bar and the legend dots. */
+.ctx-seg[data-cat="systemInstructions"],
+.ctx-legend li[data-cat="systemInstructions"] {
+  --seg: var(--violet);
+}
+.ctx-seg[data-cat="toolDefinitions"],
+.ctx-legend li[data-cat="toolDefinitions"] {
+  --seg: var(--blue);
+}
+.ctx-seg[data-cat="memory"],
+.ctx-legend li[data-cat="memory"] {
+  --seg: var(--amber);
+}
+.ctx-seg[data-cat="fileReads"],
+.ctx-legend li[data-cat="fileReads"] {
+  --seg: var(--cyan);
+}
+.ctx-seg[data-cat="conversation"],
+.ctx-legend li[data-cat="conversation"] {
+  --seg: var(--green);
+}
+.ctx-seg[data-cat="other"],
+.ctx-legend li[data-cat="other"] {
+  --seg: var(--past);
+}
+
+.ctx-legend {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.ctx-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.ctx-legend .ctx-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--seg, var(--past));
+}
+
+.ctx-legend b {
+  color: var(--text);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.ctx-spark {
+  display: block;
+  width: 100%;
+  height: 32px;
+  margin-top: 10px;
+  color: var(--accent);
+}
+
+.ctx-detail__foot {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  min-height: 0.9rem;
+}
+
+.ctx-compact {
+  color: var(--danger);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.ctx-note {
+  color: var(--past);
+  font-size: 0.7rem;
+}
+
 /* ----- Activity log ----- */
 .log {
   margin-top: 12px;

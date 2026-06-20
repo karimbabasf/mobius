@@ -1,5 +1,5 @@
 import type { FileAction, FileEvent } from "../types";
-import { basename, escapeHtml, formatAgo } from "./format";
+import { basename, escapeHtml } from "./format";
 
 const actionLabels: Record<FileAction, string> = {
   reading: "read",
@@ -16,11 +16,7 @@ const actionLabels: Record<FileAction, string> = {
  * present tense — highlighted with a caret; everything below it is past tense,
  * dimmed. When the agent is idle there is no "now", so every row reads as past.
  */
-export function renderFileLog(
-  events: FileEvent[],
-  live: boolean,
-  now: number,
-): string {
+export function renderFileLog(events: FileEvent[], live: boolean): string {
   if (events.length === 0) {
     return `<p class="log__empty">no activity recorded yet</p>`;
   }
@@ -38,7 +34,7 @@ export function renderFileLog(
       return `<li class="${rowClass}">
         <span class="log__tag log__tag--${event.action}">${escapeHtml(label)}</span>
         <span class="log__name">${escapeHtml(name)}${caret}</span>
-        <span class="log__time">${escapeHtml(formatAgo(event.at, now))}</span>
+        <span class="log__time" data-at="${event.at}"></span>
       </li>`;
     })
     .join("");

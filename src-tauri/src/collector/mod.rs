@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod context;
 pub mod liveness;
 pub mod registry;
 pub mod session;

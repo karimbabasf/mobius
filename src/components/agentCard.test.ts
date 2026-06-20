@@ -15,6 +15,7 @@ function session(partial: Partial<AgentSession> = {}): AgentSession {
     startedAt: 0,
     lastEventAt: 0,
     tokens: { input: 1200, output: 320, cache: 640 },
+    context: null,
     title: "Build a local agent tracker",
     recentFiles: [{ path: "/Users/you/project/src/main.ts", action: "editing", at: 0 }],
     ...partial,
@@ -23,7 +24,7 @@ function session(partial: Partial<AgentSession> = {}): AgentSession {
 
 describe("renderCard", () => {
   it("shows the title, full session id, model, branch, pid, and split token counts", () => {
-    const html = renderCard(session(), false, 0);
+    const html = renderCard(session(), false);
 
     expect(html).toContain("Build a local agent tracker");
     expect(html).toContain("f89686b4-e4df-4d13-8fab-90267a9d08c1");
@@ -34,12 +35,12 @@ describe("renderCard", () => {
   });
 
   it("reflects the expanded state via aria-expanded", () => {
-    expect(renderCard(session(), false, 0)).toContain('aria-expanded="false"');
-    expect(renderCard(session(), true, 0)).toContain('aria-expanded="true"');
+    expect(renderCard(session(), false)).toContain('aria-expanded="false"');
+    expect(renderCard(session(), true)).toContain('aria-expanded="true"');
   });
 
   it("includes the tool logo and the file activity log", () => {
-    const html = renderCard(session(), true, 0);
+    const html = renderCard(session(), true);
 
     expect(html).toContain("<svg");
     expect(html).toContain("tool-logo--claude");
@@ -51,14 +52,13 @@ describe("renderCard", () => {
     const html = renderCard(
       session({ tokens: { input: 0, output: 0, cache: 0 } }),
       false,
-      0,
     );
 
     expect(html).not.toContain("$");
   });
 
   it("falls back to the folder name and shows an empty activity log", () => {
-    const html = renderCard(session({ title: null, recentFiles: [] }), true, 0);
+    const html = renderCard(session({ title: null, recentFiles: [] }), true);
 
     expect(html).toContain("project");
     expect(html).toContain("no activity recorded");

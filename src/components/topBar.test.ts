@@ -15,6 +15,7 @@ function session(partial: Partial<AgentSession>): AgentSession {
     startedAt: 0,
     lastEventAt: 0,
     tokens: { input: 0, output: 0, cache: 0 },
+    context: null,
     title: null,
     recentFiles: [],
     ...partial,
