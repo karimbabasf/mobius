@@ -13,9 +13,10 @@ fn main() {
     println!("ACTIVE SESSIONS: {}", sessions.len());
     for s in &sessions {
         println!(
-            "- [{:?}] tool={:?} title={:?}\n    id={} model={:?} branch={:?}\n    tokens in/out/cache={}/{}/{} files={} action={:?}",
+            "- [{:?}] tool={:?} pid={:?} title={:?}\n    id={} model={:?} branch={:?}\n    tokens in/out/cache={}/{}/{} files={} action={:?}",
             s.status,
             s.tool,
+            s.pid,
             s.title,
             s.id,
             s.model,

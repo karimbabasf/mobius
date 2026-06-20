@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn parse_basic_extracts_core_fields() {
-        let s = parse_session(&fixture("session-basic.jsonl")).expect("should parse");
+        let s = parse_session(&fixture("sess-basic.jsonl")).expect("should parse");
         assert_eq!(s.id, "sess-basic");
         assert_eq!(s.project_path, "/Users/demo/proj");
         assert_eq!(s.branch.as_deref(), Some("feature/x"));
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn parse_basic_builds_file_activity_log_newest_first() {
-        let s = parse_session(&fixture("session-basic.jsonl")).unwrap();
+        let s = parse_session(&fixture("sess-basic.jsonl")).unwrap();
         assert_eq!(s.recent_files.len(), 4);
         assert!(matches!(s.recent_files[0].action, FileAction::Running));
         assert!(s.recent_files[0].path.contains("cargo test"));
