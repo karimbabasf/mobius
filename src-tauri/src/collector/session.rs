@@ -27,6 +27,94 @@ pub struct Tokens {
     pub cache: u64,
 }
 
+/// Where a context-window limit came from (drives a UI trust signal).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LimitSource {
+    /// Reported in-band by the provider (Codex `model_context_window`).
+    Reported,
+    /// Looked up from a static model table.
+    ModelTable,
+    /// Read from `~/.codex*/models_cache.json` (reserved; not yet used).
+    CacheFile,
+    #[default]
+    Unknown,
+}
+
+/// Which part of the context window a slice of tokens belongs to.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ContextCategory {
+    SystemInstructions,
+    ToolDefinitions,
+    Memory,
+    FileReads,
+    Conversation,
+    #[default]
+    Other,
+}
+
+/// One reconstructed slice of the occupancy total (Layer 2).
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CategorySlice {
+    pub name: ContextCategory,
+    pub tokens: u64,
+    /// True when the count is a heuristic estimate rather than tokenized text
+    /// (e.g. Claude tool definitions, which the transcript never serializes).
+    pub estimated: bool,
+}
+
+/// A compaction detected in the transcript.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Compaction {
+    pub at: i64,
+    pub pre_tokens: Option<u64>,
+    pub post_tokens: Option<u64>,
+    /// True for an explicit provider signal (Claude `compact_boundary`),
+    /// false when inferred from a drop in occupancy (Codex).
+    pub explicit: bool,
+}
+
+/// One point on the per-turn occupancy curve (the sawtooth).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSnapshot {
+    pub at: i64,
+    pub used: u64,
+}
+
+/// Current context-window occupancy for a session.
+///
+/// Layer 1 (`used`/`limit`/`fill_pct`/`cached`/`fresh`/`history`/`compactions`)
+/// is ground truth read straight from the numbers the provider writes to disk:
+/// the size of the *most recent* model call, not a cumulative sum. Layer 2
+/// (`categories`/`residual`) is a reconstructed per-category breakdown, tokenized
+/// from the transcript and normalized so the category sum equals `used`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextWindow {
+    /// Occupancy: tokens in the most recent prompt sent to the model.
+    pub used: u64,
+    /// Context-window size in tokens, when known.
+    pub limit: Option<u64>,
+    /// `used / limit * 100`; `None` when the limit is unknown.
+    pub fill_pct: Option<f32>,
+    pub limit_source: LimitSource,
+    /// Portion of `used` served from cache.
+    pub cached: u64,
+    /// Portion of `used` that was fresh (non-cached) input.
+    pub fresh: u64,
+    /// Layer-2 breakdown; empty when no tokenizer ran. Sums exactly to `used`.
+    pub categories: Vec<CategorySlice>,
+    /// Tokens folded into the `Other` slice by normalization.
+    pub residual: u64,
+    /// Per-turn occupancy points, oldest first, capped at the most recent 20.
+    pub history: Vec<ContextSnapshot>,
+    pub compactions: Vec<Compaction>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FileAction {
@@ -60,6 +148,8 @@ pub struct AgentSession {
     pub started_at: i64,
     pub last_event_at: i64,
     pub tokens: Tokens,
+    #[serde(default)]
+    pub context: Option<ContextWindow>,
     pub title: Option<String>,
     pub recent_files: Vec<FileEvent>,
 }
@@ -93,6 +183,7 @@ mod tests {
             started_at: 0,
             last_event_at: 1000,
             tokens: Tokens::default(),
+            context: None,
             title: Some("demo session".into()),
             recent_files: vec![FileEvent {
                 path: "/Users/you/project/src/main.rs".into(),

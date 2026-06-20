@@ -1,4 +1,6 @@
 pub mod adapters;
+pub mod context;
+pub mod liveness;
 pub mod registry;
 pub mod session;
 
@@ -7,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::collector::adapters::{claude, codex};
+use crate::collector::liveness::{ClaudeStatus, LiveClaude};
 use crate::collector::session::{AgentSession, Status, Tool};
 
 const DEFAULT_ACTIVE_WINDOW_MS: i64 = 10 * 60 * 1000;
@@ -26,14 +29,17 @@ struct CacheEntry {
 /// Live registry of agent sessions, built from on-disk agent logs.
 ///
 /// `snapshot` re-scans the agent log directories on each call and returns the
-/// sessions that are currently active. Parsed sessions are cached per file and
-/// only re-parsed when the file's mtime changes, so an idle dashboard does no work.
-/// Codex is scanned across multiple homes (the default profile plus isolated
-/// profiles such as `~/.codex-karim`); their session-name indexes are merged.
+/// sessions whose underlying process is still alive (see [`liveness`]). Parsed
+/// sessions are cached per file and only re-parsed when the file's mtime
+/// changes, so an idle dashboard does no work. Codex is scanned across multiple
+/// homes (the default profile plus isolated profiles such as `~/.codex-karim`);
+/// their session-name indexes are merged.
 pub struct Collector {
     claude_dir: PathBuf,
     codex_dirs: Vec<PathBuf>,
     codex_indexes: Vec<PathBuf>,
+    // Retained for API/test compatibility; liveness, not age, now gates display.
+    #[allow(dead_code)]
     active_window_ms: i64,
     cache: Mutex<HashMap<PathBuf, CacheEntry>>,
 }
@@ -91,18 +97,61 @@ impl Collector {
     }
 
     /// Active sessions right now, newest activity first.
+    ///
+    /// Gathers the live-process signals and delegates to [`Collector::snapshot_with`].
     pub fn snapshot(&self, now_ms: i64) -> Vec<AgentSession> {
+        let live_claude = liveness::live_claude_sessions();
+        let live_codex = liveness::live_codex_pids_by_file();
+        self.snapshot_with(now_ms, &live_claude, &live_codex)
+    }
+
+    /// Build the snapshot from explicit liveness maps (the injection point that
+    /// keeps the gating logic testable without real OS processes).
+    ///
+    /// A session is included only if its process is alive:
+    /// * Claude — its `sessionId` (the transcript filename stem) is present in
+    ///   `live_claude`; status comes from Claude's own registry, falling back to
+    ///   recency when the registry omits it.
+    /// * Codex — its transcript path is held open by a live `codex` process.
+    ///
+    /// Anything else is omitted entirely, so a terminated agent disappears on
+    /// the next poll rather than lingering as a stale "idle" card.
+    fn snapshot_with(
+        &self,
+        now_ms: i64,
+        live_claude: &HashMap<String, LiveClaude>,
+        live_codex: &HashMap<PathBuf, i32>,
+    ) -> Vec<AgentSession> {
+        // Codex's open files come from lsof as resolved absolute paths; resolve
+        // the candidate paths the same way so the comparison is symlink-stable.
+        let codex_live: HashMap<PathBuf, i32> = live_codex
+            .iter()
+            .filter_map(|(path, pid)| std::fs::canonicalize(path).ok().map(|c| (c, *pid)))
+            .collect();
+
         let mut files: Vec<(PathBuf, i64, Source)> = Vec::new();
         let mut claude_files = Vec::new();
-        collect_active_jsonl(&self.claude_dir, now_ms, self.active_window_ms, &mut claude_files);
+        collect_jsonl(&self.claude_dir, &mut claude_files);
         for (path, mtime) in claude_files {
-            files.push((path, mtime, Source::Claude));
+            // Claude transcripts are named `<sessionId>.jsonl`; only keep files
+            // whose session is reported alive.
+            let alive = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|stem| live_claude.contains_key(stem))
+                .unwrap_or(false);
+            if alive {
+                files.push((path, mtime, Source::Claude));
+            }
         }
         for dir in &self.codex_dirs {
             let mut codex_files = Vec::new();
-            collect_active_jsonl(dir, now_ms, self.active_window_ms, &mut codex_files);
+            collect_jsonl(dir, &mut codex_files);
             for (path, mtime) in codex_files {
-                files.push((path, mtime, Source::Codex));
+                let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                if codex_live.contains_key(&key) {
+                    files.push((path, mtime, Source::Codex));
+                }
             }
         }
 
@@ -146,20 +195,36 @@ impl Collector {
             let Some(entry) = cache.get(&path) else {
                 continue;
             };
-            let age = now_ms - entry.session.last_event_at;
-            let Some(status) = status_for_age(age, self.active_window_ms) else {
-                continue;
-            };
             let mut session = entry.session.clone();
             if !seen.insert(session.id.clone()) {
                 continue;
             }
-            session.status = status;
-            if matches!(session.tool, Tool::Codex) {
-                if let Some(name) = thread_names.get(&session.id) {
-                    session.title = Some(name.clone());
+
+            let age = now_ms - session.last_event_at;
+            match source {
+                Source::Claude => {
+                    let Some(live) = live_claude.get(&session.id) else {
+                        // Stem matched but parsed id differs (shouldn't happen) —
+                        // be conservative and skip rather than show a ghost.
+                        continue;
+                    };
+                    session.pid = Some(live.pid);
+                    session.status = match live.status {
+                        Some(ClaudeStatus::Busy) => Status::Working,
+                        Some(ClaudeStatus::Idle) => Status::Idle,
+                        None => live_status_from_age(age),
+                    };
+                }
+                Source::Codex => {
+                    let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                    session.pid = codex_live.get(&key).copied();
+                    session.status = live_status_from_age(age);
+                    if let Some(name) = thread_names.get(&session.id) {
+                        session.title = Some(name.clone());
+                    }
                 }
             }
+
             sessions.push(session);
         }
 
@@ -174,20 +239,19 @@ impl Default for Collector {
     }
 }
 
-/// Map how long ago a session was last active into a display status.
-/// Returns `None` once the session is older than the active window (hide it).
-fn status_for_age(age_ms: i64, active_window_ms: i64) -> Option<Status> {
+/// Recency-based status for a session already confirmed alive: a recent write
+/// means it's actively working, otherwise it's alive-but-idle. (Unlike the old
+/// time-window gate, this never hides a session — liveness decides visibility.)
+fn live_status_from_age(age_ms: i64) -> Status {
     if age_ms < WORKING_RECENCY_MS {
-        Some(Status::Working)
-    } else if age_ms < active_window_ms {
-        Some(Status::Idle)
+        Status::Working
     } else {
-        None
+        Status::Idle
     }
 }
 
-/// Recursively collect `*.jsonl` files modified within `window_ms` of `now_ms`.
-fn collect_active_jsonl(dir: &Path, now_ms: i64, window_ms: i64, out: &mut Vec<(PathBuf, i64)>) {
+/// Recursively collect every `*.jsonl` file under `dir` with its mtime.
+fn collect_jsonl(dir: &Path, out: &mut Vec<(PathBuf, i64)>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -197,7 +261,7 @@ fn collect_active_jsonl(dir: &Path, now_ms: i64, window_ms: i64, out: &mut Vec<(
             continue;
         };
         if meta.is_dir() {
-            collect_active_jsonl(&path, now_ms, window_ms, out);
+            collect_jsonl(&path, out);
         } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
             let mtime = meta
                 .modified()
@@ -205,9 +269,7 @@ fn collect_active_jsonl(dir: &Path, now_ms: i64, window_ms: i64, out: &mut Vec<(
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
-            if now_ms - mtime < window_ms {
-                out.push((path, mtime));
-            }
+            out.push((path, mtime));
         }
     }
 }
@@ -224,37 +286,75 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/codex")
     }
 
-    #[test]
-    fn status_for_age_maps_working_idle_and_expiry() {
-        let window = DEFAULT_ACTIVE_WINDOW_MS;
-        assert!(matches!(status_for_age(1_000, window), Some(Status::Working)));
-        assert!(matches!(
-            status_for_age(5 * 60 * 1000, window),
-            Some(Status::Idle)
-        ));
-        assert!(status_for_age(11 * 60 * 1000, window).is_none());
+    /// A live-Claude map asserting a single session is alive, with no explicit
+    /// status (so the collector falls back to recency).
+    fn alive_claude(id: &str) -> HashMap<String, LiveClaude> {
+        let mut map = HashMap::new();
+        map.insert(
+            id.to_string(),
+            LiveClaude {
+                pid: 4242,
+                status: None,
+                entrypoint: Some("cli".into()),
+            },
+        );
+        map
+    }
+
+    fn codex_alive(path: PathBuf) -> HashMap<PathBuf, i32> {
+        let mut map = HashMap::new();
+        map.insert(path, 9001);
+        map
     }
 
     #[test]
-    fn snapshot_shows_recent_session_as_working() {
+    fn live_status_from_age_splits_working_and_idle() {
+        assert!(matches!(live_status_from_age(1_000), Status::Working));
+        assert!(matches!(
+            live_status_from_age(5 * 60 * 1000),
+            Status::Idle
+        ));
+    }
+
+    #[test]
+    fn snapshot_shows_live_session_as_working_and_sets_pid() {
         let collector = Collector::with_claude_dir(claude_fixtures(), DEFAULT_ACTIVE_WINDOW_MS);
-        let base = claude::parse_session(&claude_fixtures().join("session-basic.jsonl")).unwrap();
+        let base = claude::parse_session(&claude_fixtures().join("sess-basic.jsonl")).unwrap();
         let now = base.last_event_at + 30_000;
-        let sessions = collector.snapshot(now);
+        let sessions =
+            collector.snapshot_with(now, &alive_claude("sess-basic"), &HashMap::new());
         let found = sessions
             .iter()
             .find(|s| s.id == "sess-basic")
-            .expect("recent session should be present");
+            .expect("live session should be present");
         assert!(matches!(found.status, Status::Working));
+        assert_eq!(found.pid, Some(4242));
     }
 
     #[test]
-    fn snapshot_drops_sessions_older_than_window() {
+    fn snapshot_omits_session_whose_process_is_dead() {
         let collector = Collector::with_claude_dir(claude_fixtures(), DEFAULT_ACTIVE_WINDOW_MS);
-        let base = claude::parse_session(&claude_fixtures().join("session-basic.jsonl")).unwrap();
-        let now = base.last_event_at + 20 * 60 * 1000;
-        let sessions = collector.snapshot(now);
+        let base = claude::parse_session(&claude_fixtures().join("sess-basic.jsonl")).unwrap();
+        // Recent file, but no live process for it — must not appear (the headline bug).
+        let now = base.last_event_at + 30_000;
+        let sessions = collector.snapshot_with(now, &HashMap::new(), &HashMap::new());
         assert!(!sessions.iter().any(|s| s.id == "sess-basic"));
+    }
+
+    #[test]
+    fn snapshot_keeps_live_but_idle_session_past_old_window() {
+        let collector = Collector::with_claude_dir(claude_fixtures(), DEFAULT_ACTIVE_WINDOW_MS);
+        let base = claude::parse_session(&claude_fixtures().join("sess-basic.jsonl")).unwrap();
+        // 20 minutes silent: the old time-window would have dropped it, but the
+        // process is alive, so it should remain — shown as idle.
+        let now = base.last_event_at + 20 * 60 * 1000;
+        let sessions =
+            collector.snapshot_with(now, &alive_claude("sess-basic"), &HashMap::new());
+        let found = sessions
+            .iter()
+            .find(|s| s.id == "sess-basic")
+            .expect("alive idle session should remain");
+        assert!(matches!(found.status, Status::Idle));
     }
 
     #[test]
@@ -266,15 +366,17 @@ mod tests {
             codex_dir.join("session_index.jsonl"),
             DEFAULT_ACTIVE_WINDOW_MS,
         );
-        let base = codex::parse_session(&codex_dir.join("rollout-sample.jsonl")).unwrap();
+        let rollout = codex_dir.join("rollout-sample.jsonl");
+        let base = codex::parse_session(&rollout).unwrap();
         let now = base.last_event_at + 30_000;
-        let sessions = collector.snapshot(now);
+        let sessions = collector.snapshot_with(now, &HashMap::new(), &codex_alive(rollout));
         let found = sessions
             .iter()
             .find(|s| s.id == "codex-1")
             .expect("codex session should be present");
         assert!(matches!(found.tool, Tool::Codex));
         assert_eq!(found.title.as_deref(), Some("Build the thing"));
+        assert_eq!(found.pid, Some(9001));
     }
 
     #[test]
@@ -287,10 +389,11 @@ mod tests {
             vec![codex_dir.join("session_index.jsonl")],
             DEFAULT_ACTIVE_WINDOW_MS,
         );
-        let base = codex::parse_session(&codex_dir.join("rollout-sample.jsonl")).unwrap();
+        let rollout = codex_dir.join("rollout-sample.jsonl");
+        let base = codex::parse_session(&rollout).unwrap();
         let now = base.last_event_at + 30_000;
         let count = collector
-            .snapshot(now)
+            .snapshot_with(now, &HashMap::new(), &codex_alive(rollout))
             .iter()
             .filter(|s| s.id == "codex-1")
             .count();

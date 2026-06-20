@@ -23,3 +23,9 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
+# Offline BPE tokenizer (o200k_base vocab embedded at compile time) for the
+# Layer-2 context-window breakdown. Exact for Codex, close proxy for Claude.
+tiktoken-rs = "0.12"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal"] }

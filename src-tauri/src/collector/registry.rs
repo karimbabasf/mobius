@@ -64,6 +64,7 @@ mod tests {
                 output: 320,
                 cache: 640,
             },
+            context: None,
             title: Some("demo".into()),
             recent_files: vec![],
         }

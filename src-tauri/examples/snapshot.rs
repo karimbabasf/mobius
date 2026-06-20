@@ -13,9 +13,10 @@ fn main() {
     println!("ACTIVE SESSIONS: {}", sessions.len());
     for s in &sessions {
         println!(
-            "- [{:?}] tool={:?} title={:?}\n    id={} model={:?} branch={:?}\n    tokens in/out/cache={}/{}/{} files={} action={:?}",
+            "- [{:?}] tool={:?} pid={:?} title={:?}\n    id={} model={:?} branch={:?}\n    tokens in/out/cache={}/{}/{} files={} action={:?}",
             s.status,
             s.tool,
+            s.pid,
             s.title,
             s.id,
             s.model,
@@ -26,6 +27,34 @@ fn main() {
             s.recent_files.len(),
             s.current_action,
         );
+        if let Some(ctx) = &s.context {
+            let pct = ctx
+                .fill_pct
+                .map(|p| format!("{p:.1}%"))
+                .unwrap_or_else(|| "—".into());
+            let limit = ctx
+                .limit
+                .map(|l| l.to_string())
+                .unwrap_or_else(|| "?".into());
+            println!(
+                "    context: {}/{} ({}) cached={} fresh={} history={} compactions={}",
+                ctx.used,
+                limit,
+                pct,
+                ctx.cached,
+                ctx.fresh,
+                ctx.history.len(),
+                ctx.compactions.len(),
+            );
+            let cats: Vec<String> = ctx
+                .categories
+                .iter()
+                .map(|c| format!("{:?}={}{}", c.name, c.tokens, if c.estimated { "~" } else { "" }))
+                .collect();
+            if !cats.is_empty() {
+                println!("      breakdown: {}", cats.join(" "));
+            }
+        }
         for f in s.recent_files.iter().take(4) {
             println!("      {:?}  {}", f.action, f.path);
         }

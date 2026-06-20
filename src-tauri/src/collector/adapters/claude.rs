@@ -6,11 +6,16 @@
 //! fixtures without touching the real home directory. Liveness/status is applied
 //! separately by the collector (AMC-052), which knows the current time.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde_json::Value;
 
-use crate::collector::session::{AgentSession, FileAction, FileEvent, Status, Tokens, Tool};
+use crate::collector::context::{self, OccupancyRaw, SegmentAccumulator, CLAUDE_TOOLDEF_ESTIMATE};
+use crate::collector::session::{
+    AgentSession, Compaction, ContextCategory, ContextSnapshot, FileAction, FileEvent, LimitSource,
+    Status, Tokens, Tool,
+};
 
 /// Parse one Claude Code session log into a normalized session.
 /// Returns `None` when the file cannot be read or carries no session id.
@@ -28,6 +33,13 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
     let mut tokens = Tokens::default();
     let mut files: Vec<FileEvent> = Vec::new();
 
+    // Context-window reconstruction state (occupancy = the most recent call).
+    let mut occ = OccupancyRaw::default();
+    let mut seg = SegmentAccumulator::default();
+    let mut history: Vec<ContextSnapshot> = Vec::new();
+    let mut compactions: Vec<Compaction> = Vec::new();
+    let mut tool_kinds: HashMap<String, String> = HashMap::new();
+
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -37,6 +49,12 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
             Ok(value) => value,
             Err(_) => continue,
         };
+
+        let ts = event
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .and_then(context::parse_iso8601_ms)
+            .unwrap_or(when);
 
         if id.is_none() {
             id = event.get("sessionId").and_then(|v| v.as_str()).map(String::from);
@@ -62,6 +80,23 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                 .map(String::from);
         }
 
+        if event.get("type").and_then(|v| v.as_str()) == Some("system") {
+            if event.get("subtype").and_then(|v| v.as_str()) == Some("compact_boundary") {
+                // Explicit compaction: record the drop so the sawtooth shows it
+                // and occupancy rebases to the post-compaction size.
+                let meta = event.get("compactMetadata");
+                let pre = meta.and_then(|m| m.get("preTokens")).and_then(|v| v.as_u64());
+                let post = meta.and_then(|m| m.get("postTokens")).and_then(|v| v.as_u64());
+                compactions.push(Compaction { at: ts, pre_tokens: pre, post_tokens: post, explicit: true });
+                if let Some(p) = post {
+                    occ.used = p;
+                    history.push(ContextSnapshot { at: ts, used: p });
+                }
+            } else if let Some(text) = event.get("content").and_then(|v| v.as_str()) {
+                seg.push(ContextCategory::SystemInstructions, text);
+            }
+        }
+
         let is_user = event.get("type").and_then(|v| v.as_str()) == Some("user");
         if let Some(message) = event.get("message") {
             if let Some(found) = message.get("model").and_then(|v| v.as_str()) {
@@ -72,26 +107,60 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                 tokens.input += count("input_tokens");
                 tokens.output += count("output_tokens");
                 tokens.cache += count("cache_read_input_tokens") + count("cache_creation_input_tokens");
+
+                // Occupancy: the full prompt size of THIS call. The most recent
+                // call wins (overwrite), and each call is a point on the sawtooth.
+                let cache = count("cache_read_input_tokens") + count("cache_creation_input_tokens");
+                let used = count("input_tokens") + cache;
+                if used > 0 {
+                    occ.used = used;
+                    occ.cached = cache;
+                    history.push(ContextSnapshot { at: ts, used });
+                }
             }
             match message.get("content") {
                 Some(Value::Array(blocks)) => {
                     for block in blocks {
                         let btype = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                        if is_user && btype == "text" && first_prompt.is_none() {
+                        if btype == "text" {
                             if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                                if !is_command_wrapper(text) && !text.trim().is_empty() {
+                                if is_user && first_prompt.is_none()
+                                    && !is_command_wrapper(text) && !text.trim().is_empty()
+                                {
                                     first_prompt = Some(text.to_string());
                                 }
+                                seg.push(segment_for_text(text, is_user), text);
                             }
                         }
                         if btype == "tool_use" {
+                            if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
+                                if let Some(name) = block.get("name").and_then(|v| v.as_str()) {
+                                    tool_kinds.insert(id.to_string(), name.to_string());
+                                }
+                            }
                             if let (Some(name), Some(input)) =
                                 (block.get("name").and_then(|v| v.as_str()), block.get("input"))
                             {
+                                // The tool call itself (paths, commands) is conversation.
+                                seg.push(ContextCategory::Conversation, &input.to_string());
                                 if let Some(fe) = file_event_for_tool(name, input, when) {
                                     files.push(fe);
                                 }
                             }
+                        }
+                        if btype == "tool_result" {
+                            let kind = block
+                                .get("tool_use_id")
+                                .and_then(|v| v.as_str())
+                                .and_then(|id| tool_kinds.get(id))
+                                .map(String::as_str)
+                                .unwrap_or("");
+                            let cat = if matches!(kind, "Read" | "Grep" | "Glob") {
+                                ContextCategory::FileReads
+                            } else {
+                                ContextCategory::Conversation
+                            };
+                            seg.push(cat, &result_text(block.get("content")));
                         }
                     }
                 }
@@ -103,6 +172,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                     {
                         first_prompt = Some(text.to_string());
                     }
+                    seg.push(segment_for_text(text, is_user), text);
                 }
                 _ => {}
             }
@@ -122,6 +192,18 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
     files.reverse();
     files.truncate(12);
 
+    // Resolve the context limit from the model name (Claude never reports it).
+    if let Some(m) = &model {
+        occ.limit = context::claude_limit(m);
+        occ.limit_source = if occ.limit.is_some() {
+            LimitSource::ModelTable
+        } else {
+            LimitSource::Unknown
+        };
+    }
+    let context_window =
+        context::build(occ, &seg, history, compactions, CLAUDE_TOOLDEF_ESTIMATE, true);
+
     Some(AgentSession {
         id,
         tool: Tool::Claude,
@@ -134,6 +216,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
         started_at: when,
         last_event_at: when,
         tokens,
+        context: Some(context_window),
         title: Some(title),
         recent_files: files,
     })
@@ -167,6 +250,35 @@ fn truncate(value: &str, max: usize) -> String {
     }
     let kept: String = value.chars().take(max.saturating_sub(1)).collect();
     format!("{kept}…")
+}
+
+/// Classify a free-text block: user text quoting a memory file is `Memory`,
+/// everything else is `Conversation`.
+fn segment_for_text(text: &str, is_user: bool) -> ContextCategory {
+    if is_user && (text.contains("CLAUDE.md") || text.contains("AGENTS.md") || text.contains("# claudeMd")) {
+        ContextCategory::Memory
+    } else {
+        ContextCategory::Conversation
+    }
+}
+
+/// Flatten a `tool_result` block's `content` (string or array of text blocks)
+/// into plain text for tokenizing.
+fn result_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(blocks)) => {
+            let mut out = String::new();
+            for block in blocks {
+                if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                    out.push_str(t);
+                    out.push('\n');
+                }
+            }
+            out
+        }
+        _ => String::new(),
+    }
 }
 
 /// True for synthetic slash-command / caveat prompts that are not real user text.
@@ -312,7 +424,7 @@ mod tests {
 
     #[test]
     fn parse_basic_extracts_core_fields() {
-        let s = parse_session(&fixture("session-basic.jsonl")).expect("should parse");
+        let s = parse_session(&fixture("sess-basic.jsonl")).expect("should parse");
         assert_eq!(s.id, "sess-basic");
         assert_eq!(s.project_path, "/Users/demo/proj");
         assert_eq!(s.branch.as_deref(), Some("feature/x"));
@@ -326,7 +438,7 @@ mod tests {
 
     #[test]
     fn parse_basic_builds_file_activity_log_newest_first() {
-        let s = parse_session(&fixture("session-basic.jsonl")).unwrap();
+        let s = parse_session(&fixture("sess-basic.jsonl")).unwrap();
         assert_eq!(s.recent_files.len(), 4);
         assert!(matches!(s.recent_files[0].action, FileAction::Running));
         assert!(s.recent_files[0].path.contains("cargo test"));
@@ -341,6 +453,46 @@ mod tests {
             .iter()
             .any(|e| matches!(e.action, FileAction::Reading)));
         assert_eq!(s.current_action.as_deref(), Some("Running cargo test"));
+    }
+
+    #[test]
+    fn context_occupancy_uses_last_call_not_spend_sum() {
+        let s = parse_session(&fixture("sess-context.jsonl")).unwrap();
+        let ctx = s.context.expect("context window present");
+        // Occupancy is the most recent call's prompt size (2 + 60000 + 500),
+        // NOT the cumulative spend sum that `tokens` accumulates.
+        assert_eq!(ctx.used, 60_502);
+        assert_eq!(ctx.cached, 60_500);
+        assert_eq!(ctx.fresh, 2);
+        assert_eq!(ctx.limit, Some(200_000));
+        assert!(matches!(ctx.limit_source, LimitSource::ModelTable));
+        assert!((ctx.fill_pct.unwrap() - 30.251).abs() < 0.1);
+    }
+
+    #[test]
+    fn context_history_shows_sawtooth_across_compaction() {
+        let s = parse_session(&fixture("sess-context.jsonl")).unwrap();
+        let ctx = s.context.unwrap();
+        // rise (145000), rise (151002), compaction drop (60000), rise (60502)
+        let used: Vec<u64> = ctx.history.iter().map(|h| h.used).collect();
+        assert_eq!(used, vec![145_000, 151_002, 60_000, 60_502]);
+        assert_eq!(ctx.compactions.len(), 1);
+        assert!(ctx.compactions[0].explicit);
+        assert_eq!(ctx.compactions[0].pre_tokens, Some(151_002));
+        assert_eq!(ctx.compactions[0].post_tokens, Some(60_000));
+    }
+
+    #[test]
+    fn context_breakdown_reconciles_to_used() {
+        let s = parse_session(&fixture("sess-context.jsonl")).unwrap();
+        let ctx = s.context.unwrap();
+        let sum: u64 = ctx.categories.iter().map(|c| c.tokens).sum();
+        assert_eq!(sum, ctx.used, "categories must sum exactly to the authoritative total");
+        assert!(ctx.categories.iter().any(|c| matches!(c.name, ContextCategory::Memory)));
+        assert!(ctx
+            .categories
+            .iter()
+            .any(|c| matches!(c.name, ContextCategory::ToolDefinitions) && c.estimated));
     }
 
     #[test]

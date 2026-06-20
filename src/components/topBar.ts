@@ -1,12 +1,6 @@
 import type { AgentSession } from "../types";
 import { formatTokens } from "./format";
 
-function liveSessions(sessions: AgentSession[]): AgentSession[] {
-  return sessions.filter(
-    (session) => session.status !== "ended" && session.status !== "dead",
-  );
-}
-
 function totalTokens(sessions: AgentSession[]): number {
   return sessions.reduce(
     (sum, session) =>
@@ -15,22 +9,26 @@ function totalTokens(sessions: AgentSession[]): number {
   );
 }
 
+/**
+ * The telemetry strip under the prompt. Every session shown is, by definition,
+ * a live process now (terminated ones are gone), so "active" is just the count.
+ */
 export function renderTopBar(sessions: AgentSession[]): string {
-  const live = liveSessions(sessions);
-  const working = live.filter((session) => session.status === "working").length;
+  const working = sessions.filter(
+    (session) => session.status === "working",
+  ).length;
 
   return `
-    <article class="metric">
-      <span class="metric-label">Active agents</span>
-      <strong>${live.length}</strong>
-    </article>
-    <article class="metric">
-      <span class="metric-label">Working</span>
-      <strong>${working}</strong>
-    </article>
-    <article class="metric">
-      <span class="metric-label">Total tokens (live)</span>
-      <strong>${formatTokens(totalTokens(live))}</strong>
-    </article>
+    <span class="telemetry__item">
+      <strong>${sessions.length}</strong><span class="telemetry__label">active</span>
+    </span>
+    <span class="telemetry__sep" aria-hidden="true">·</span>
+    <span class="telemetry__item">
+      <strong>${working}</strong><span class="telemetry__label">working</span>
+    </span>
+    <span class="telemetry__sep" aria-hidden="true">·</span>
+    <span class="telemetry__item">
+      <strong>${formatTokens(totalTokens(sessions))}</strong><span class="telemetry__label">tokens</span>
+    </span>
   `;
 }

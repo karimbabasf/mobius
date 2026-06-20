@@ -1,0 +1,5 @@
+{"timestamp":"2026-06-19T16:33:45.869Z","type":"session_meta","payload":{"id":"codex-1","cwd":"/Users/demo/proj","cli_version":"0.142.0-alpha.1","model_provider":"openai","originator":"codex_vscode"}}
+{"timestamp":"2026-06-19T16:33:45.878Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"/Users/demo/proj","model":"gpt-5.5","approval_policy":"never"}}
+{"timestamp":"2026-06-19T16:33:50.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"cargo build\",\"workdir\":\"/Users/demo/proj\"}","call_id":"c1"}}
+{"timestamp":"2026-06-19T16:33:55.000Z","type":"response_item","payload":{"type":"patch_apply_end","success":true,"stdout":"Success. Updated the following files:\nM src/lib.rs\n","changes":{"/Users/demo/proj/src/lib.rs":{"type":"update","content":"fn x() {}"}}}}
+{"timestamp":"2026-06-19T16:34:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":111,"output_tokens":22,"cached_input_tokens":33}}}}
