@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::collector::adapters::{claude, codex};
+use crate::collector::adapters::{claude, codex, hermes};
 use crate::collector::liveness::{ClaudeStatus, LiveClaude};
-use crate::collector::session::{AgentSession, Status};
+use crate::collector::session::{AgentSession, Status, TitleSource};
 
 const DEFAULT_ACTIVE_WINDOW_MS: i64 = 10 * 60 * 1000;
 const WORKING_RECENCY_MS: i64 = 90 * 1000;
@@ -38,8 +38,10 @@ pub struct Collector {
     claude_dir: PathBuf,
     codex_dirs: Vec<PathBuf>,
     codex_indexes: Vec<PathBuf>,
-    // Retained for API/test compatibility; liveness, not age, now gates display.
-    #[allow(dead_code)]
+    /// Hermes session DB (`~/.hermes/state.db`), if Hermes is installed.
+    hermes_db: Option<PathBuf>,
+    /// Recency window: a Hermes session quieter than this ages out of the
+    /// dashboard. (Claude/Codex are gated by process liveness instead.)
     active_window_ms: i64,
     cache: Mutex<HashMap<PathBuf, CacheEntry>>,
 }
@@ -57,13 +59,14 @@ impl Collector {
                 home.join(".codex").join("session_index.jsonl"),
                 home.join(".codex-karim").join("session_index.jsonl"),
             ],
+            Some(home.join(".hermes").join("state.db")),
             DEFAULT_ACTIVE_WINDOW_MS,
         )
     }
 
     /// Claude-only collector (used by tests that should not see local Codex logs).
     pub fn with_claude_dir(claude_dir: PathBuf, active_window_ms: i64) -> Self {
-        Self::build(claude_dir, Vec::new(), Vec::new(), active_window_ms)
+        Self::build(claude_dir, Vec::new(), Vec::new(), None, active_window_ms)
     }
 
     /// Single-Codex-home collector (test helper).
@@ -77,6 +80,18 @@ impl Collector {
             claude_dir,
             vec![codex_dir],
             vec![codex_index],
+            None,
+            active_window_ms,
+        )
+    }
+
+    /// Hermes-only collector (test helper).
+    pub fn with_hermes_db(hermes_db: PathBuf, active_window_ms: i64) -> Self {
+        Self::build(
+            PathBuf::from("/nonexistent-claude"),
+            Vec::new(),
+            Vec::new(),
+            Some(hermes_db),
             active_window_ms,
         )
     }
@@ -85,12 +100,14 @@ impl Collector {
         claude_dir: PathBuf,
         codex_dirs: Vec<PathBuf>,
         codex_indexes: Vec<PathBuf>,
+        hermes_db: Option<PathBuf>,
         active_window_ms: i64,
     ) -> Self {
         Self {
             claude_dir,
             codex_dirs,
             codex_indexes,
+            hermes_db,
             active_window_ms,
             cache: Mutex::new(HashMap::new()),
         }
@@ -102,7 +119,30 @@ impl Collector {
     pub fn snapshot(&self, now_ms: i64) -> Vec<AgentSession> {
         let live_claude = liveness::live_claude_sessions();
         let live_codex = liveness::live_codex_pids_by_file();
-        self.snapshot_with(now_ms, &live_claude, &live_codex)
+        let hermes_pid = liveness::hermes_daemon_pid();
+        self.snapshot_with(now_ms, &live_claude, &live_codex, hermes_pid)
+    }
+
+    pub fn rename_session(&self, session_id: &str, new_title: &str) -> Result<(), String> {
+        if new_title.trim().is_empty() {
+            return Err("Agent name cannot be empty.".into());
+        }
+
+        let mut claude_files = Vec::new();
+        collect_jsonl(&self.claude_dir, &mut claude_files);
+        for (path, _) in claude_files {
+            if path.file_stem().and_then(|s| s.to_str()) == Some(session_id) {
+                return claude::rename_ai_title(&path, new_title);
+            }
+        }
+
+        for index in &self.codex_indexes {
+            if codex::load_thread_names(index).contains_key(session_id) {
+                return codex::rename_thread_name(index, session_id, new_title);
+            }
+        }
+
+        Err("No writable provider name found for this session.".into())
     }
 
     /// Build the snapshot from explicit liveness maps (the injection point that
@@ -121,6 +161,7 @@ impl Collector {
         now_ms: i64,
         live_claude: &HashMap<String, LiveClaude>,
         live_codex: &HashMap<PathBuf, i32>,
+        hermes_pid: Option<i32>,
     ) -> Vec<AgentSession> {
         // Codex's open files come from lsof as resolved absolute paths; resolve
         // the candidate paths the same way so the comparison is symlink-stable.
@@ -157,7 +198,10 @@ impl Collector {
 
         // Codex stores session names out-of-band; merge every home's index if any
         // Codex file is active (session ids are globally unique, so merging is safe).
-        let thread_names = if files.iter().any(|(_, _, source)| matches!(source, Source::Codex)) {
+        let thread_names = if files
+            .iter()
+            .any(|(_, _, source)| matches!(source, Source::Codex))
+        {
             let mut names = HashMap::new();
             for index in &self.codex_indexes {
                 for (id, name) in codex::load_thread_names(index) {
@@ -221,6 +265,8 @@ impl Collector {
                     session.status = live_status_from_age(age);
                     if let Some(name) = thread_names.get(&session.id) {
                         session.title = Some(name.clone());
+                        session.title_source = TitleSource::Provider;
+                        session.can_rename = true;
                     }
                 }
             }
@@ -228,7 +274,28 @@ impl Collector {
             sessions.push(session);
         }
 
-        sessions.sort_by(|a, b| b.last_event_at.cmp(&a.last_event_at));
+        // Hermes: one daemon, many sessions in one SQLite DB. Gate on the daemon
+        // being alive (like a process check), then apply the recency window so
+        // old sessions age out even though the daemon lives on. Status is set
+        // here, consistent with the Codex branch above.
+        if let (Some(db), Some(pid)) = (self.hermes_db.as_ref(), hermes_pid) {
+            for mut session in hermes::snapshot_sessions(db) {
+                if !seen.insert(session.id.clone()) {
+                    continue;
+                }
+                let age = now_ms - session.last_event_at;
+                if age >= self.active_window_ms {
+                    continue;
+                }
+                session.pid = Some(pid);
+                session.status = live_status_from_age(age);
+                sessions.push(session);
+            }
+        }
+
+        // Order by creation time (newest first) so a card holds a fixed slot.
+        // Sorting by activity made cards jump as agents flipped working/idle.
+        sessions.sort_by(newest_started_first);
         sessions
     }
 }
@@ -248,6 +315,15 @@ fn live_status_from_age(age_ms: i64) -> Status {
     } else {
         Status::Idle
     }
+}
+
+/// Snapshot ordering: newest-created session first (by `started_at`), with the
+/// id as a tie-break so equal timestamps never swap between snapshots. Ordering
+/// is independent of activity, so a card keeps its slot as status changes.
+fn newest_started_first(a: &AgentSession, b: &AgentSession) -> std::cmp::Ordering {
+    b.started_at
+        .cmp(&a.started_at)
+        .then_with(|| a.id.cmp(&b.id))
 }
 
 /// Recursively collect every `*.jsonl` file under `dir` with its mtime.
@@ -311,10 +387,7 @@ mod tests {
     #[test]
     fn live_status_from_age_splits_working_and_idle() {
         assert!(matches!(live_status_from_age(1_000), Status::Working));
-        assert!(matches!(
-            live_status_from_age(5 * 60 * 1000),
-            Status::Idle
-        ));
+        assert!(matches!(live_status_from_age(5 * 60 * 1000), Status::Idle));
     }
 
     #[test]
@@ -323,7 +396,7 @@ mod tests {
         let base = claude::parse_session(&claude_fixtures().join("sess-basic.jsonl")).unwrap();
         let now = base.last_event_at + 30_000;
         let sessions =
-            collector.snapshot_with(now, &alive_claude("sess-basic"), &HashMap::new());
+            collector.snapshot_with(now, &alive_claude("sess-basic"), &HashMap::new(), None);
         let found = sessions
             .iter()
             .find(|s| s.id == "sess-basic")
@@ -338,7 +411,7 @@ mod tests {
         let base = claude::parse_session(&claude_fixtures().join("sess-basic.jsonl")).unwrap();
         // Recent file, but no live process for it — must not appear (the headline bug).
         let now = base.last_event_at + 30_000;
-        let sessions = collector.snapshot_with(now, &HashMap::new(), &HashMap::new());
+        let sessions = collector.snapshot_with(now, &HashMap::new(), &HashMap::new(), None);
         assert!(!sessions.iter().any(|s| s.id == "sess-basic"));
     }
 
@@ -350,12 +423,49 @@ mod tests {
         // process is alive, so it should remain — shown as idle.
         let now = base.last_event_at + 20 * 60 * 1000;
         let sessions =
-            collector.snapshot_with(now, &alive_claude("sess-basic"), &HashMap::new());
+            collector.snapshot_with(now, &alive_claude("sess-basic"), &HashMap::new(), None);
         let found = sessions
             .iter()
             .find(|s| s.id == "sess-basic")
             .expect("alive idle session should remain");
         assert!(matches!(found.status, Status::Idle));
+    }
+
+    /// Clone a parsed session, overriding the fields the sort cares about.
+    fn session_with(id: &str, started_at: i64, last_event_at: i64) -> AgentSession {
+        let mut s = claude::parse_session(&claude_fixtures().join("sess-basic.jsonl")).unwrap();
+        s.id = id.to_string();
+        s.started_at = started_at;
+        s.last_event_at = last_event_at;
+        s
+    }
+
+    #[test]
+    fn snapshot_orders_by_started_at_newest_first_not_by_activity() {
+        // The newest-created session sorts first regardless of who acted last:
+        // `old` has far more recent activity but an earlier start, yet must sort
+        // below `new`. This is what keeps a card from jumping on status changes.
+        let new = session_with("new", 2_000, 10);
+        let old = session_with("old", 1_000, 9_999);
+        let mut list = vec![old.clone(), new.clone()];
+        list.sort_by(newest_started_first);
+        assert_eq!(
+            list.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["new", "old"],
+        );
+    }
+
+    #[test]
+    fn snapshot_order_is_stable_on_started_at_ties() {
+        // Equal start times break ties on id, so snapshots never swap two cards.
+        let b = session_with("b", 1_000, 50);
+        let a = session_with("a", 1_000, 10);
+        let mut list = vec![b.clone(), a.clone()];
+        list.sort_by(newest_started_first);
+        assert_eq!(
+            list.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"],
+        );
     }
 
     #[test]
@@ -370,7 +480,7 @@ mod tests {
         let rollout = codex_dir.join("rollout-sample.jsonl");
         let base = codex::parse_session(&rollout).unwrap();
         let now = base.last_event_at + 30_000;
-        let sessions = collector.snapshot_with(now, &HashMap::new(), &codex_alive(rollout));
+        let sessions = collector.snapshot_with(now, &HashMap::new(), &codex_alive(rollout), None);
         let found = sessions
             .iter()
             .find(|s| s.id == "codex-1")
@@ -388,16 +498,88 @@ mod tests {
             PathBuf::from("/nonexistent-claude"),
             vec![codex_dir.clone(), codex_dir.clone()],
             vec![codex_dir.join("session_index.jsonl")],
+            None,
             DEFAULT_ACTIVE_WINDOW_MS,
         );
         let rollout = codex_dir.join("rollout-sample.jsonl");
         let base = codex::parse_session(&rollout).unwrap();
         let now = base.last_event_at + 30_000;
         let count = collector
-            .snapshot_with(now, &HashMap::new(), &codex_alive(rollout))
+            .snapshot_with(now, &HashMap::new(), &codex_alive(rollout), None)
             .iter()
             .filter(|s| s.id == "codex-1")
             .count();
         assert_eq!(count, 1);
+    }
+
+    fn hermes_db(tag: &str, started: f64, last_msg: f64) -> PathBuf {
+        use rusqlite::Connection;
+        let path = std::env::temp_dir().join(format!(
+            "mobius-collector-hermes-{}-{}.db",
+            std::process::id(),
+            tag
+        ));
+        let _ = std::fs::remove_file(&path);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                 id TEXT PRIMARY KEY, source TEXT NOT NULL, model TEXT,
+                 started_at REAL NOT NULL, ended_at REAL,
+                 input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
+                 cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0,
+                 cwd TEXT, title TEXT, archived INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE messages (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 session_id TEXT NOT NULL, timestamp REAL NOT NULL
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, cwd, title, archived)
+             VALUES ('herm-1','cli','fugu-ultra',?1,'/work/proj','Demo',0)",
+            rusqlite::params![started],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (session_id, timestamp) VALUES ('herm-1', ?1)",
+            rusqlite::params![last_msg],
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn snapshot_includes_live_hermes_session_as_working() {
+        let db = hermes_db("live", 1_000.0, 1_000.0); // last_event_at = 1_000_000 ms
+        let collector = Collector::with_hermes_db(db, DEFAULT_ACTIVE_WINDOW_MS);
+        let now = 1_000_000 + 30_000; // 30s after last activity -> Working
+        let sessions = collector.snapshot_with(now, &HashMap::new(), &HashMap::new(), Some(4321));
+        let found = sessions
+            .iter()
+            .find(|s| s.id == "herm-1")
+            .expect("live hermes session should be present");
+        assert!(matches!(found.tool, Tool::Hermes));
+        assert!(matches!(found.status, Status::Working));
+        assert_eq!(found.pid, Some(4321));
+        assert_eq!(found.title.as_deref(), Some("Demo"));
+    }
+
+    #[test]
+    fn snapshot_omits_hermes_when_daemon_not_running() {
+        let db = hermes_db("nodaemon", 1_000.0, 1_000.0);
+        let collector = Collector::with_hermes_db(db, DEFAULT_ACTIVE_WINDOW_MS);
+        let now = 1_000_000 + 30_000;
+        let sessions = collector.snapshot_with(now, &HashMap::new(), &HashMap::new(), None);
+        assert!(!sessions.iter().any(|s| s.id == "herm-1"));
+    }
+
+    #[test]
+    fn snapshot_omits_hermes_session_aged_out_of_window() {
+        let db = hermes_db("aged", 1_000.0, 1_000.0);
+        let collector = Collector::with_hermes_db(db, DEFAULT_ACTIVE_WINDOW_MS);
+        let now = 1_000_000 + 20 * 60 * 1000; // 20 min later -> outside 10-min window
+        let sessions = collector.snapshot_with(now, &HashMap::new(), &HashMap::new(), Some(4321));
+        assert!(!sessions.iter().any(|s| s.id == "herm-1"));
     }
 }
