@@ -6,6 +6,12 @@
 //! and returns the local coding sessions (`source='cli'` with a working
 //! directory). DB timestamps are epoch *seconds*; we convert to milliseconds.
 //!
+//! Hermes records *every* CLI exchange as a session row — including internal
+//! probes (e.g. "Reply exactly: AUTOSTART_DISABLED_OK") and one-line greetings,
+//! which it leaves open, untitled, and with zero tool calls. Those are not
+//! agents, so we keep only sessions with real work: a tool call or an
+//! auto-generated title (Hermes only titles substantive conversations).
+//!
 //! Status is left at `Idle` and `pid` unset here: the collector applies daemon
 //! liveness, the recency window, and the working/idle split, exactly as it does
 //! for Codex.
@@ -31,6 +37,7 @@ pub fn snapshot_sessions(db_path: &Path) -> Vec<AgentSession> {
                 (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = s.id) \
          FROM sessions s \
          WHERE s.source = 'cli' AND s.cwd IS NOT NULL AND s.cwd <> '' AND s.archived = 0 \
+           AND (s.tool_call_count > 0 OR s.title IS NOT NULL) \
          ORDER BY s.started_at DESC",
     ) {
         Ok(stmt) => stmt,
@@ -131,7 +138,8 @@ mod tests {
                  started_at REAL NOT NULL, ended_at REAL,
                  input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
                  cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0,
-                 cwd TEXT, title TEXT, archived INTEGER NOT NULL DEFAULT 0
+                 cwd TEXT, title TEXT, tool_call_count INTEGER NOT NULL DEFAULT 0,
+                 archived INTEGER NOT NULL DEFAULT 0
              );
              CREATE TABLE messages (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,6 +194,37 @@ mod tests {
         assert!(!s.can_rename);
         assert!(matches!(s.status, Status::Idle)); // collector overrides later
         assert!(s.pid.is_none());
+    }
+
+    #[test]
+    fn excludes_no_work_sessions_but_keeps_real_ones() {
+        // Hermes logs internal probes ("Reply exactly: ...") and one-line
+        // greetings as open cli sessions with no tools and no title. Those are
+        // not agents; real work has either a tool call or an auto-title.
+        let db = make_db("nowork", |conn| {
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at, cwd, title, tool_call_count, archived)
+                 VALUES ('ghost','cli',1000.0,'/work/proj',NULL,0,0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at, cwd, title, tool_call_count, archived)
+                 VALUES ('worker','cli',1000.0,'/work/proj',NULL,3,0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at, cwd, title, tool_call_count, archived)
+                 VALUES ('titled','cli',1000.0,'/work/proj','Real Chat',0,0)",
+                [],
+            )
+            .unwrap();
+        });
+        let ids: Vec<String> = snapshot_sessions(&db).into_iter().map(|s| s.id).collect();
+        assert!(!ids.contains(&"ghost".to_string()), "no-work ghost must be hidden");
+        assert!(ids.contains(&"worker".to_string()), "tool-using session must show");
+        assert!(ids.contains(&"titled".to_string()), "titled session must show");
     }
 
     #[test]

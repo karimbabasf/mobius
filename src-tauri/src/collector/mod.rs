@@ -527,7 +527,8 @@ mod tests {
                  started_at REAL NOT NULL, ended_at REAL,
                  input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
                  cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0,
-                 cwd TEXT, title TEXT, archived INTEGER NOT NULL DEFAULT 0
+                 cwd TEXT, title TEXT, tool_call_count INTEGER NOT NULL DEFAULT 0,
+                 archived INTEGER NOT NULL DEFAULT 0
              );
              CREATE TABLE messages (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
