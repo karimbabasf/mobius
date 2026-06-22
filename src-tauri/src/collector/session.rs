@@ -6,6 +6,7 @@ pub enum Tool {
     Claude,
     Codex,
     Cursor,
+    Hermes,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -134,6 +135,14 @@ pub struct FileEvent {
     pub at: i64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TitleSource {
+    Provider,
+    #[default]
+    Fallback,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSession {
@@ -151,6 +160,8 @@ pub struct AgentSession {
     #[serde(default)]
     pub context: Option<ContextWindow>,
     pub title: Option<String>,
+    pub title_source: TitleSource,
+    pub can_rename: bool,
     pub recent_files: Vec<FileEvent>,
 }
 
@@ -185,6 +196,8 @@ mod tests {
             tokens: Tokens::default(),
             context: None,
             title: Some("demo session".into()),
+            title_source: TitleSource::Provider,
+            can_rename: true,
             recent_files: vec![FileEvent {
                 path: "/Users/you/project/src/main.rs".into(),
                 action: FileAction::Editing,
@@ -226,6 +239,11 @@ mod tests {
     }
 
     #[test]
+    fn hermes_tool_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&Tool::Hermes).unwrap(), "\"hermes\"");
+    }
+
+    #[test]
     fn file_event_serializes_to_camel_case_for_ui() {
         let event = FileEvent {
             path: "/tmp/notes.rs".into(),
@@ -243,6 +261,8 @@ mod tests {
         let json = serde_json::to_string(&sample()).unwrap();
         assert!(json.contains("\"recentFiles\""));
         assert!(json.contains("\"title\""));
+        assert!(json.contains("\"titleSource\":\"provider\""));
+        assert!(json.contains("\"canRename\":true"));
         assert!(!json.contains("costUsd"), "cost was dropped: {json}");
     }
 }
