@@ -1,4 +1,4 @@
-export type Tool = "claude" | "codex" | "cursor";
+export type Tool = "claude" | "codex" | "cursor" | "hermes";
 
 export type Status =
   | "starting"
@@ -83,5 +83,7 @@ export interface AgentSession {
   tokens: Tokens;
   context: ContextWindow | null;
   title: string | null;
+  titleSource: "provider" | "fallback";
+  canRename: boolean;
   recentFiles: FileEvent[];
 }

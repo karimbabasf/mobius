@@ -1,5 +1,14 @@
-import type { AgentSession } from "../types";
+import type { AgentSession, Tool } from "../types";
 import { formatTokens } from "./format";
+
+const providerLabels: Record<Tool, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  cursor: "Cursor",
+  hermes: "Hermes",
+};
+
+const providerOrder: Tool[] = ["claude", "codex", "cursor", "hermes"];
 
 function totalTokens(sessions: AgentSession[]): number {
   return sessions.reduce(
@@ -7,6 +16,22 @@ function totalTokens(sessions: AgentSession[]): number {
       sum + session.tokens.input + session.tokens.output + session.tokens.cache,
     0,
   );
+}
+
+function providerBreakdown(sessions: AgentSession[]): string {
+  return providerOrder
+    .map((tool) => ({
+      tool,
+      count: sessions.filter((session) => session.tool === tool).length,
+    }))
+    .filter(({ count }) => count > 0)
+    .map(
+      ({ tool, count }) => `
+    <span class="telemetry__provider" data-provider="${tool}">
+      <strong>${count}</strong><span class="telemetry__label">${providerLabels[tool]}</span>
+    </span>`,
+    )
+    .join("");
 }
 
 /**
@@ -17,6 +42,7 @@ export function renderTopBar(sessions: AgentSession[]): string {
   const working = sessions.filter(
     (session) => session.status === "working",
   ).length;
+  const providers = providerBreakdown(sessions);
 
   return `
     <span class="telemetry__item">
@@ -30,5 +56,12 @@ export function renderTopBar(sessions: AgentSession[]): string {
     <span class="telemetry__item">
       <strong>${formatTokens(totalTokens(sessions))}</strong><span class="telemetry__label">tokens</span>
     </span>
+    ${
+      providers
+        ? `<span class="telemetry__sep" aria-hidden="true">·</span>
+    <span class="telemetry__providers" aria-label="Visible agent providers">${providers}
+    </span>`
+        : ""
+    }
   `;
 }
