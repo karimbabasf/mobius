@@ -93,6 +93,33 @@ pub fn live_codex_pids_by_file() -> HashMap<PathBuf, i32> {
     }
 }
 
+/// PID of the running Hermes daemon, if any.
+///
+/// Hermes runs a single background process whose argv contains
+/// `.hermes/<...>/bin/hermes`. There is no per-session process (every session
+/// lives in one SQLite DB), so this single PID gates all Hermes cards. Uses
+/// `pgrep -f`; yields `None` where `pgrep` is missing, nothing matches, or on
+/// non-Unix targets.
+pub fn hermes_daemon_pid() -> Option<i32> {
+    let output = Command::new("pgrep")
+        .args(["-f", r"\.hermes/.*/bin/hermes"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        // pgrep exits non-zero when nothing matched.
+        return None;
+    }
+    first_pid(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// First PID from `pgrep` output (one PID per line).
+fn first_pid(output: &str) -> Option<i32> {
+    output
+        .lines()
+        .filter_map(|line| line.trim().parse::<i32>().ok())
+        .next()
+}
+
 /// Parse `lsof -F pn` output into open-`.jsonl` -> PID.
 fn parse_lsof_pn(output: &str) -> HashMap<PathBuf, i32> {
     let mut map = HashMap::new();
@@ -234,6 +261,14 @@ n/Users/karimbaba/.codex/sessions/2026/06/19/rollout-c.jsonl
         assert_eq!(busy.1.session_id.as_deref(), Some("sess-busy"));
         assert_eq!(busy.1.status.as_deref(), Some("busy"));
         assert_eq!(busy.1.entrypoint.as_deref(), Some("cli"));
+    }
+
+    #[test]
+    fn first_pid_picks_first_line_and_ignores_blanks() {
+        assert_eq!(first_pid("83766\n83770\n"), Some(83766));
+        assert_eq!(first_pid("\n  91234 \n"), Some(91234));
+        assert_eq!(first_pid(""), None);
+        assert_eq!(first_pid("not-a-pid\n"), None);
     }
 
     #[test]
