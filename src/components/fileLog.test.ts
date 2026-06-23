@@ -44,6 +44,19 @@ describe("renderFileLog", () => {
     expect(idle).not.toContain("log__row--now");
   });
 
+  it("wraps activity in a scrollable live stream with an animated now marker", () => {
+    const events: FileEvent[] = [
+      { path: "/a/now.ts", action: "editing", at: 0 },
+      { path: "/a/past.ts", action: "reading", at: 0 },
+    ];
+    const html = renderFileLog(events, true);
+
+    expect(html).toContain('class="log__viewport"');
+    expect(html).toContain('aria-label="scrollable live activity"');
+    expect(html).toContain("log__live-pulse");
+    expect(html).toContain("Live now");
+  });
+
   it("escapes file names to prevent HTML injection", () => {
     const events: FileEvent[] = [
       { path: "/x/<img src=x onerror=alert(1)>.ts", action: "reading", at: 0 },

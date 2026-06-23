@@ -46,17 +46,18 @@ export function renderFileLog(events: FileEvent[], live: boolean): string {
       const name = visibleName(event);
       const isNow = live && index === 0;
       const rowClass = isNow ? "log__row log__row--now" : "log__row log__row--past";
-      const caret = isNow
-        ? `<span class="log__caret" aria-hidden="true">█</span>`
+      const nowMarker = isNow
+        ? `<span class="log__live-pulse" aria-label="Live now"><i aria-hidden="true"></i>Live now</span>`
         : "";
       return `<li class="${rowClass}">
         <span class="log__tag log__tag--${event.action}">${escapeHtml(label)}</span>
-        <span class="log__name">${escapeHtml(name)}${caret}</span>
+        <span class="log__name">${escapeHtml(name)}</span>
+        ${nowMarker}
         ${renderRawDetail(event, name)}
         <span class="log__time" data-at="${event.at}"></span>
       </li>`;
     })
     .join("");
 
-  return `<ul class="log__list">${rows}</ul>`;
+  return `<div class="log__viewport" aria-label="scrollable live activity"><ul class="log__list">${rows}</ul></div>`;
 }
