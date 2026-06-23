@@ -27,6 +27,19 @@ export function formatPct(pct: number): string {
   return `${Math.round(pct)}%`;
 }
 
+/**
+ * Token burn rate over a span, as a compact "1.2k/min" style label. Returns
+ * "—" when the elapsed span is non-positive (single-snapshot sessions), so the
+ * UI never shows a divide-by-zero or an absurd spike.
+ */
+export function formatBurnRate(tokens: number, elapsedMs: number): string {
+  if (elapsedMs <= 0 || tokens <= 0) {
+    return "—";
+  }
+  const perMinute = tokens / (elapsedMs / 60_000);
+  return `${formatTokens(Math.round(perMinute))}/min`;
+}
+
 /** Compact, terminal-style relative time: "now", "8s", "3m", "2h", "1d". */
 export function formatAgo(at: number, now: number): string {
   const seconds = Math.max(0, Math.round((now - at) / 1000));

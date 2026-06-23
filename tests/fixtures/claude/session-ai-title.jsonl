@@ -1,0 +1,3 @@
+{"type":"user","sessionId":"sess-ai-title","cwd":"/Users/demo/agent-ui","timestamp":"2026-06-19T11:00:00.000Z","slug":"fallback-slug","message":{"role":"user","content":[{"type":"text","text":"This is the first prompt and should not be the agent name"}]}}
+{"type":"ai-title","sessionId":"sess-ai-title","cwd":"/Users/demo/agent-ui","timestamp":"2026-06-19T11:00:01.000Z","aiTitle":"Real Claude Chat Name"}
+{"type":"assistant","sessionId":"sess-ai-title","cwd":"/Users/demo/agent-ui","timestamp":"2026-06-19T11:00:05.000Z","message":{"role":"assistant","model":"claude-sonnet-4-6","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"Working on it."}]}}

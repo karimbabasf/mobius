@@ -1,9 +1,9 @@
-# Agent Mission Control Architecture
+# MOBIUS Architecture
 
 ## Current Shape
 
 ```text
-agent-mission-control/
+mobius/
 ├── docs/                       ARCHITECTURE, PROJECT_CONTEXT, DECISIONS, KANBAN
 ├── src-tauri/
 │   ├── examples/snapshot.rs     dev helper: print the live snapshot get_sessions returns

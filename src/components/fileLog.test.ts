@@ -19,6 +19,17 @@ describe("renderFileLog", () => {
     expect(html).toContain("build.log");
   });
 
+  it("keeps shell commands behind an explicit reveal control", () => {
+    const events: FileEvent[] = [
+      { path: "cargo test --lib hermes -- --nocapture", action: "running", at: 0 },
+    ];
+    const html = renderFileLog(events, true);
+
+    expect(html).toContain("shell command");
+    expect(html).toContain("reveal raw");
+    expect(html).toContain("<code>cargo test --lib hermes -- --nocapture</code>");
+  });
+
   it("marks the newest event as the live 'now' row when the agent is working", () => {
     const events: FileEvent[] = [
       { path: "/a/now.ts", action: "editing", at: 0 },

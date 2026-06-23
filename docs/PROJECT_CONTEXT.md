@@ -1,11 +1,11 @@
-# Agent Mission Control Project Context
+# MOBIUS Project Context
 
 > Living context file for future agents and future chats.
 > Update this file every time the project direction, architecture, ticket plan, or implementation state changes.
 
 ## Quick Read
 
-Agent Mission Control is a macOS desktop app for seeing all local AI coding agents in one place: Claude Code, Codex, and Cursor.
+MOBIUS is a macOS desktop app for seeing all local AI coding agents in one place: Claude Code, Codex, and Cursor.
 
 In plain English: it is a live dashboard for "what are my coding agents doing right now?"
 
@@ -13,8 +13,8 @@ The owner is Karim, who is a non-technical developer and vibe coder with crypto 
 
 ## Source Of Truth
 
-- Product design: `docs/superpowers/specs/2026-06-19-agent-mission-control-design.md`
-- Implementation plan: `docs/superpowers/plans/2026-06-19-agent-mission-control.md`
+- Product design: `docs/superpowers/specs/2026-06-19-mobius-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-06-19-mobius.md`
 - Ticket board: `docs/KANBAN.md`
 - Decision log: `docs/DECISIONS.md`
 - Architecture map, once implementation starts: `docs/ARCHITECTURE.md`
@@ -96,7 +96,7 @@ Example:
 Expected final layout:
 
 ```text
-agent-mission-control/
+mobius/
 ├── README.md
 ├── docs/
 │   ├── ARCHITECTURE.md
@@ -115,7 +115,7 @@ agent-mission-control/
 Runtime app data belongs outside the repo:
 
 ```text
-~/Library/Application Support/AgentMissionControl/
+~/Library/Application Support/Mobius/
 ├── state.sqlite
 ├── logs/
 └── pricing-cache.json

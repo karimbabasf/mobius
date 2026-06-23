@@ -1,4 +1,4 @@
-export type Tool = "claude" | "codex" | "cursor" | "hermes";
+export type Tool = "claude" | "codex" | "cursor" | "hermes" | "agent";
 
 export type Status =
   | "starting"
@@ -69,6 +69,35 @@ export interface FileEvent {
   at: number;
 }
 
+/**
+ * Run-level telemetry for autonomous agents (Hermes/Fugu one-shot builds).
+ * Present only on Hermes sessions; `null`/absent for Claude/Codex.
+ *
+ * Note: Fugu/Sakana does not report a dollar figure to `state.db`, so
+ * `costUsd` is usually `null` — token burn (see `tokens`) is the real cost
+ * signal, paired with `turns`/`maxTurns`.
+ */
+export interface RunStats {
+  turns: number;
+  maxTurns: number | null;
+  toolCalls: number;
+  messages: number;
+  effort: string | null;
+  costUsd: number | null;
+  costStatus: string | null;
+  endReason: string | null;
+}
+
+/**
+ * A node in a live process subtree, attached to a card by the OS process
+ * scanner. Mirrors the Rust `ProcessNode`.
+ */
+export interface ProcessNode {
+  pid: number;
+  command: string;
+  children: ProcessNode[];
+}
+
 export interface AgentSession {
   id: string;
   tool: Tool;
@@ -86,4 +115,9 @@ export interface AgentSession {
   titleSource: "provider" | "fallback";
   canRename: boolean;
   recentFiles: FileEvent[];
+  run?: RunStats | null;
+  /** Live process subtree, present when the scanner matched this agent. */
+  processTree?: ProcessNode | null;
+  /** True for a synthesized card: an agent process with no session of its own. */
+  untracked?: boolean;
 }

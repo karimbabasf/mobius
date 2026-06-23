@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::collector::context::{self, OccupancyRaw, SegmentAccumulator, CLAUDE_TOOLDEF_ESTIMATE};
 use crate::collector::session::{
     AgentSession, Compaction, ContextCategory, ContextSnapshot, FileAction, FileEvent, LimitSource,
-    Status, Tokens, Tool,
+    Status, TitleSource, Tokens, Tool,
 };
 
 /// Parse one Claude Code session log into a normalized session.
@@ -29,7 +29,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
     let mut model: Option<String> = None;
     let mut slug: Option<String> = None;
     let mut summary: Option<String> = None;
-    let mut first_prompt: Option<String> = None;
+    let mut ai_title: Option<String> = None;
     let mut tokens = Tokens::default();
     let mut files: Vec<FileEvent> = Vec::new();
 
@@ -57,7 +57,10 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
             .unwrap_or(when);
 
         if id.is_none() {
-            id = event.get("sessionId").and_then(|v| v.as_str()).map(String::from);
+            id = event
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .map(String::from);
         }
         if cwd.is_none() {
             cwd = event.get("cwd").and_then(|v| v.as_str()).map(String::from);
@@ -72,6 +75,12 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
         if slug.is_none() {
             slug = event.get("slug").and_then(|v| v.as_str()).map(String::from);
         }
+        if let Some(title) = event.get("aiTitle").and_then(|v| v.as_str()) {
+            let title = title.trim();
+            if !title.is_empty() {
+                ai_title = Some(title.to_string());
+            }
+        }
         if event.get("type").and_then(|v| v.as_str()) == Some("summary") && summary.is_none() {
             summary = event
                 .get("summary")
@@ -85,9 +94,18 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                 // Explicit compaction: record the drop so the sawtooth shows it
                 // and occupancy rebases to the post-compaction size.
                 let meta = event.get("compactMetadata");
-                let pre = meta.and_then(|m| m.get("preTokens")).and_then(|v| v.as_u64());
-                let post = meta.and_then(|m| m.get("postTokens")).and_then(|v| v.as_u64());
-                compactions.push(Compaction { at: ts, pre_tokens: pre, post_tokens: post, explicit: true });
+                let pre = meta
+                    .and_then(|m| m.get("preTokens"))
+                    .and_then(|v| v.as_u64());
+                let post = meta
+                    .and_then(|m| m.get("postTokens"))
+                    .and_then(|v| v.as_u64());
+                compactions.push(Compaction {
+                    at: ts,
+                    pre_tokens: pre,
+                    post_tokens: post,
+                    explicit: true,
+                });
                 if let Some(p) = post {
                     occ.used = p;
                     history.push(ContextSnapshot { at: ts, used: p });
@@ -106,7 +124,8 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                 let count = |key: &str| usage.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
                 tokens.input += count("input_tokens");
                 tokens.output += count("output_tokens");
-                tokens.cache += count("cache_read_input_tokens") + count("cache_creation_input_tokens");
+                tokens.cache +=
+                    count("cache_read_input_tokens") + count("cache_creation_input_tokens");
 
                 // Occupancy: the full prompt size of THIS call. The most recent
                 // call wins (overwrite), and each call is a point on the sawtooth.
@@ -124,11 +143,6 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                         let btype = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
                         if btype == "text" {
                             if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                                if is_user && first_prompt.is_none()
-                                    && !is_command_wrapper(text) && !text.trim().is_empty()
-                                {
-                                    first_prompt = Some(text.to_string());
-                                }
                                 seg.push(segment_for_text(text, is_user), text);
                             }
                         }
@@ -138,9 +152,10 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                                     tool_kinds.insert(id.to_string(), name.to_string());
                                 }
                             }
-                            if let (Some(name), Some(input)) =
-                                (block.get("name").and_then(|v| v.as_str()), block.get("input"))
-                            {
+                            if let (Some(name), Some(input)) = (
+                                block.get("name").and_then(|v| v.as_str()),
+                                block.get("input"),
+                            ) {
                                 // The tool call itself (paths, commands) is conversation.
                                 seg.push(ContextCategory::Conversation, &input.to_string());
                                 if let Some(fe) = file_event_for_tool(name, input, ts) {
@@ -165,13 +180,6 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                     }
                 }
                 Some(Value::String(text)) => {
-                    if is_user
-                        && first_prompt.is_none()
-                        && !is_command_wrapper(text)
-                        && !text.trim().is_empty()
-                    {
-                        first_prompt = Some(text.to_string());
-                    }
                     seg.push(segment_for_text(text, is_user), text);
                 }
                 _ => {}
@@ -181,9 +189,9 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
 
     let id = id?;
     let project_path = cwd.unwrap_or_default();
-    let title = derive_title(
-        summary.as_deref(),
-        first_prompt.as_deref(),
+    let can_rename = ai_title.as_ref().is_some_and(|s| !s.trim().is_empty());
+    let (title, title_source) = derive_title(
+        ai_title.as_deref().or(summary.as_deref()),
         slug.as_deref(),
         &project_path,
     );
@@ -201,8 +209,14 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
             LimitSource::Unknown
         };
     }
-    let context_window =
-        context::build(occ, &seg, history, compactions, CLAUDE_TOOLDEF_ESTIMATE, true);
+    let context_window = context::build(
+        occ,
+        &seg,
+        history,
+        compactions,
+        CLAUDE_TOOLDEF_ESTIMATE,
+        true,
+    );
 
     Some(AgentSession {
         id,
@@ -218,8 +232,44 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
         tokens,
         context: Some(context_window),
         title: Some(title),
+        title_source,
+        can_rename,
         recent_files: files,
+        run: None,
+        process_tree: None,
+        untracked: false,
     })
+}
+
+pub fn rename_ai_title(path: &Path, new_title: &str) -> Result<(), String> {
+    let new_title = new_title.trim();
+    if new_title.is_empty() {
+        return Err("Agent name cannot be empty.".into());
+    }
+
+    let content = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
+    let mut changed = false;
+    let mut lines = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut value: Value = serde_json::from_str(line).map_err(|err| err.to_string())?;
+        if value.get("aiTitle").and_then(|v| v.as_str()).is_some() {
+            value["aiTitle"] = Value::String(new_title.to_string());
+            changed = true;
+        }
+        lines.push(serde_json::to_string(&value).map_err(|err| err.to_string())?);
+    }
+
+    if !changed {
+        return Err("This Claude session has no writable aiTitle.".into());
+    }
+
+    let mut next = lines.join("\n");
+    next.push('\n');
+    std::fs::write(path, next).map_err(|err| err.to_string())
 }
 
 /// Last-modified time of a file in epoch milliseconds (0 if unavailable).
@@ -255,7 +305,9 @@ fn truncate(value: &str, max: usize) -> String {
 /// Classify a free-text block: user text quoting a memory file is `Memory`,
 /// everything else is `Conversation`.
 fn segment_for_text(text: &str, is_user: bool) -> ContextCategory {
-    if is_user && (text.contains("CLAUDE.md") || text.contains("AGENTS.md") || text.contains("# claudeMd")) {
+    if is_user
+        && (text.contains("CLAUDE.md") || text.contains("AGENTS.md") || text.contains("# claudeMd"))
+    {
         ContextCategory::Memory
     } else {
         ContextCategory::Conversation
@@ -281,48 +333,29 @@ fn result_text(content: Option<&Value>) -> String {
     }
 }
 
-/// True for synthetic slash-command / caveat prompts that are not real user text.
-fn is_command_wrapper(text: &str) -> bool {
-    let t = text.trim_start();
-    t.starts_with("<command-") || t.starts_with("<local-command-") || t.starts_with("<command_")
-}
-
-/// Collapse whitespace and trim a user prompt down to a one-line title.
-fn clean_prompt(text: &str) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate(collapsed.trim(), 64)
-}
-
 fn dekebab(slug: &str) -> String {
     slug.trim().replace('-', " ")
 }
 
-/// Pick a human-readable session name: summary -> first real prompt -> slug -> folder.
+/// Pick a human-readable session name: provider title -> slug -> folder.
 fn derive_title(
-    summary: Option<&str>,
-    first_prompt: Option<&str>,
+    provider_title: Option<&str>,
     slug: Option<&str>,
     project_path: &str,
-) -> String {
-    if let Some(s) = summary {
+) -> (String, TitleSource) {
+    if let Some(s) = provider_title {
         let s = s.trim();
         if !s.is_empty() {
-            return truncate(s, 64);
-        }
-    }
-    if let Some(p) = first_prompt {
-        let c = clean_prompt(p);
-        if !c.is_empty() {
-            return c;
+            return (truncate(s, 64), TitleSource::Provider);
         }
     }
     if let Some(sl) = slug {
         let d = dekebab(sl);
         if !d.is_empty() {
-            return d;
+            return (d, TitleSource::Fallback);
         }
     }
-    basename(project_path)
+    (basename(project_path), TitleSource::Fallback)
 }
 
 /// First whitespace-delimited token of a redirect target, ignoring fd dups (`>&1`).
@@ -341,7 +374,11 @@ fn find_single_redirect(cmd: &str) -> Option<usize> {
     for i in 0..bytes.len() {
         if bytes[i] == b'>' {
             let prev = if i == 0 { b' ' } else { bytes[i - 1] };
-            let next = if i + 1 < bytes.len() { bytes[i + 1] } else { b' ' };
+            let next = if i + 1 < bytes.len() {
+                bytes[i + 1]
+            } else {
+                b' '
+            };
             if next != b'>' && prev == b' ' {
                 return Some(i);
             }
@@ -374,17 +411,35 @@ fn file_event_for_tool(name: &str, input: &Value, at: i64) -> Option<FileEvent> 
             .map(|s| s.to_string())
     };
     match name {
-        "Read" => str_field("file_path").map(|p| FileEvent { path: p, action: FileAction::Reading, at }),
-        "Write" => str_field("file_path").map(|p| FileEvent { path: p, action: FileAction::Writing, at }),
-        "Edit" | "MultiEdit" => {
-            str_field("file_path").map(|p| FileEvent { path: p, action: FileAction::Editing, at })
-        }
+        "Read" => str_field("file_path").map(|p| FileEvent {
+            path: p,
+            action: FileAction::Reading,
+            at,
+        }),
+        "Write" => str_field("file_path").map(|p| FileEvent {
+            path: p,
+            action: FileAction::Writing,
+            at,
+        }),
+        "Edit" | "MultiEdit" => str_field("file_path").map(|p| FileEvent {
+            path: p,
+            action: FileAction::Editing,
+            at,
+        }),
         "NotebookEdit" => str_field("notebook_path")
             .or_else(|| str_field("file_path"))
-            .map(|p| FileEvent { path: p, action: FileAction::Editing, at }),
+            .map(|p| FileEvent {
+                path: p,
+                action: FileAction::Editing,
+                at,
+            }),
         "Grep" | "Glob" => str_field("pattern")
             .or_else(|| str_field("path"))
-            .map(|p| FileEvent { path: p, action: FileAction::Searching, at }),
+            .map(|p| FileEvent {
+                path: p,
+                action: FileAction::Searching,
+                at,
+            }),
         "Bash" => input.get("command").and_then(|v| v.as_str()).map(|cmd| {
             let (action, path) = classify_bash(cmd);
             FileEvent { path, action, at }
@@ -414,12 +469,19 @@ pub(crate) fn action_phrase(event: &FileEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collector::session::TitleSource;
     use std::path::PathBuf;
 
     fn fixture(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/fixtures/claude")
             .join(name)
+    }
+
+    fn temp_session_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mobius-{}-{}", name, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("session.jsonl")
     }
 
     #[test]
@@ -432,7 +494,9 @@ mod tests {
         assert_eq!(s.tokens.input, 300);
         assert_eq!(s.tokens.output, 60);
         assert_eq!(s.tokens.cache, 120);
-        assert_eq!(s.title.as_deref(), Some("Add a retry helper with backoff"));
+        assert_eq!(s.title.as_deref(), Some("proj"));
+        assert!(matches!(s.title_source, TitleSource::Fallback));
+        assert!(!s.can_rename);
         assert!(matches!(s.tool, Tool::Claude));
     }
 
@@ -497,8 +561,14 @@ mod tests {
         let s = parse_session(&fixture("sess-context.jsonl")).unwrap();
         let ctx = s.context.unwrap();
         let sum: u64 = ctx.categories.iter().map(|c| c.tokens).sum();
-        assert_eq!(sum, ctx.used, "categories must sum exactly to the authoritative total");
-        assert!(ctx.categories.iter().any(|c| matches!(c.name, ContextCategory::Memory)));
+        assert_eq!(
+            sum, ctx.used,
+            "categories must sum exactly to the authoritative total"
+        );
+        assert!(ctx
+            .categories
+            .iter()
+            .any(|c| matches!(c.name, ContextCategory::Memory)));
         assert!(ctx
             .categories
             .iter()
@@ -509,6 +579,8 @@ mod tests {
     fn parse_summary_prefers_summary_title_over_command_prompt() {
         let s = parse_session(&fixture("session-summary.jsonl")).unwrap();
         assert_eq!(s.title.as_deref(), Some("Refactor auth module"));
+        assert!(matches!(s.title_source, TitleSource::Provider));
+        assert!(!s.can_rename);
         assert_eq!(s.model.as_deref(), Some("claude-sonnet-4-6"));
         assert!(s
             .recent_files
@@ -517,29 +589,80 @@ mod tests {
     }
 
     #[test]
-    fn derive_title_follows_precedence() {
+    fn parse_prefers_ai_title_and_does_not_use_first_prompt_as_name() {
+        let s = parse_session(&fixture("session-ai-title.jsonl")).unwrap();
+        assert_eq!(s.title.as_deref(), Some("Real Claude Chat Name"));
+        assert!(matches!(s.title_source, TitleSource::Provider));
+        assert!(s.can_rename);
+        assert_ne!(
+            s.title.as_deref(),
+            Some("This is the first prompt and should not be the agent name")
+        );
+    }
+
+    #[test]
+    fn parse_without_provider_title_falls_back_to_slug_not_first_prompt() {
+        let s = parse_session(&fixture("sess-basic.jsonl")).unwrap();
+        assert_eq!(s.title.as_deref(), Some("proj"));
+        assert!(matches!(s.title_source, TitleSource::Fallback));
+        assert!(!s.can_rename);
+    }
+
+    #[test]
+    fn rename_ai_title_updates_existing_provider_name_only() {
+        let path = temp_session_path("claude-rename-supported");
+        std::fs::copy(fixture("session-ai-title.jsonl"), &path).unwrap();
+
+        rename_ai_title(&path, "Renamed Claude Chat").unwrap();
+
+        let parsed = parse_session(&path).unwrap();
+        assert_eq!(parsed.title.as_deref(), Some("Renamed Claude Chat"));
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("\"aiTitle\":\"Renamed Claude Chat\""));
+        assert!(content
+            .lines()
+            .all(|line| serde_json::from_str::<Value>(line).is_ok()));
+    }
+
+    #[test]
+    fn rename_ai_title_rejects_files_without_provider_name() {
+        let path = temp_session_path("claude-rename-unsupported");
+        std::fs::copy(fixture("sess-basic.jsonl"), &path).unwrap();
+
+        assert!(rename_ai_title(&path, "Should not write").is_err());
+        let parsed = parse_session(&path).unwrap();
+        assert_eq!(parsed.title.as_deref(), Some("proj"));
+    }
+
+    #[test]
+    fn derive_title_follows_precedence_without_prompt_fallback() {
         assert_eq!(
-            derive_title(Some("Real title"), Some("hi"), Some("a-b"), "/x/proj"),
+            derive_title(Some("Real title"), Some("a-b"), "/x/proj").0,
             "Real title"
         );
         assert_eq!(
-            derive_title(None, Some("Make it faster"), Some("a-b"), "/x/proj"),
-            "Make it faster"
-        );
-        assert_eq!(
-            derive_title(None, None, Some("my-cool-thing"), "/x/proj"),
+            derive_title(None, Some("my-cool-thing"), "/x/proj").0,
             "my cool thing"
         );
-        assert_eq!(derive_title(None, None, None, "/x/proj"), "proj");
+        assert_eq!(derive_title(None, None, "/x/proj").0, "proj");
     }
 
     #[test]
     fn classify_bash_detects_redirects() {
-        assert!(matches!(classify_bash("echo hi >> out.log").0, FileAction::Appending));
+        assert!(matches!(
+            classify_bash("echo hi >> out.log").0,
+            FileAction::Appending
+        ));
         assert_eq!(classify_bash("echo hi >> out.log").1, "out.log");
-        assert!(matches!(classify_bash("echo hi > result.txt").0, FileAction::Writing));
+        assert!(matches!(
+            classify_bash("echo hi > result.txt").0,
+            FileAction::Writing
+        ));
         assert_eq!(classify_bash("echo hi > result.txt").1, "result.txt");
-        assert!(matches!(classify_bash("cargo test 2>&1").0, FileAction::Running));
+        assert!(matches!(
+            classify_bash("cargo test 2>&1").0,
+            FileAction::Running
+        ));
     }
 
     #[test]
@@ -552,9 +675,17 @@ mod tests {
 
     #[test]
     fn action_phrase_reads_like_a_sentence() {
-        let running = FileEvent { path: "cargo test".into(), action: FileAction::Running, at: 0 };
+        let running = FileEvent {
+            path: "cargo test".into(),
+            action: FileAction::Running,
+            at: 0,
+        };
         assert_eq!(action_phrase(&running), "Running cargo test");
-        let editing = FileEvent { path: "/a/b/styles.css".into(), action: FileAction::Editing, at: 0 };
+        let editing = FileEvent {
+            path: "/a/b/styles.css".into(),
+            action: FileAction::Editing,
+            at: 0,
+        };
         assert_eq!(action_phrase(&editing), "Editing styles.css");
     }
 

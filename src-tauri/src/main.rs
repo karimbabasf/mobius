@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    agent_mission_control_lib::run()
+    mobius_lib::run()
 }

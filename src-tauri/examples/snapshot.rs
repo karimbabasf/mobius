@@ -1,7 +1,16 @@
 //! Dev helper: print the exact live snapshot the app's `get_sessions` returns.
 //! Run with: cargo run --example snapshot
 
-use agent_mission_control_lib::collector::Collector;
+use mobius_lib::collector::scanner::ProcessNode;
+use mobius_lib::collector::Collector;
+
+/// Print a process subtree as an indented list.
+fn print_tree(node: &ProcessNode, depth: usize) {
+    println!("      {}{} {}", "  ".repeat(depth), node.pid, node.command);
+    for child in &node.children {
+        print_tree(child, depth + 1);
+    }
+}
 
 fn main() {
     let now = std::time::SystemTime::now()
@@ -49,14 +58,42 @@ fn main() {
             let cats: Vec<String> = ctx
                 .categories
                 .iter()
-                .map(|c| format!("{:?}={}{}", c.name, c.tokens, if c.estimated { "~" } else { "" }))
+                .map(|c| {
+                    format!(
+                        "{:?}={}{}",
+                        c.name,
+                        c.tokens,
+                        if c.estimated { "~" } else { "" }
+                    )
+                })
                 .collect();
             if !cats.is_empty() {
                 println!("      breakdown: {}", cats.join(" "));
             }
         }
+        if let Some(run) = &s.run {
+            let cost = run
+                .cost_usd
+                .map(|c| format!("${c:.4}"))
+                .unwrap_or_else(|| "unreported".into());
+            let cap = run
+                .max_turns
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "?".into());
+            println!(
+                "    run: turns={}/{} tools={} msgs={} effort={:?} cost={} end={:?}",
+                run.turns, cap, run.tool_calls, run.messages, run.effort, cost, run.end_reason,
+            );
+        }
         for f in s.recent_files.iter().take(4) {
             println!("      {:?}  {}", f.action, f.path);
+        }
+        if s.untracked {
+            println!("    UNTRACKED (no session card of its own)");
+        }
+        if let Some(tree) = &s.process_tree {
+            println!("    process tree:");
+            print_tree(tree, 0);
         }
     }
 }

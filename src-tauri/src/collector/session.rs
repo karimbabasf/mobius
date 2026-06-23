@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::collector::scanner::ProcessNode;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tool {
@@ -7,6 +9,9 @@ pub enum Tool {
     Codex,
     Cursor,
     Hermes,
+    /// Generic catch-all for a signature-matched process the scanner found that
+    /// isn't one of the first-class providers (e.g. ollama, aider, goose).
+    Agent,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -143,6 +148,37 @@ pub enum TitleSource {
     Fallback,
 }
 
+/// Run-level telemetry for autonomous agents (currently Hermes/Fugu one-shot
+/// builds). Absent for Claude/Codex sessions, where it stays `None` and is
+/// omitted from the serialized payload entirely.
+///
+/// Honest about the source: Fugu/Sakana does not write a dollar figure to
+/// `state.db` (`estimated_cost_usd` is `0.0`, `actual_cost_usd` is null), so
+/// `cost_usd` is usually `None` and **token burn is the de-facto cost signal**.
+/// `turns` (model round-trips) against `max_turns` (the iteration cap) is the
+/// other half of the burn picture.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunStats {
+    /// Model round-trips so far (`api_call_count`) — the real "turn" counter.
+    pub turns: u32,
+    /// Iteration cap from `model_config.max_iterations`, when known.
+    pub max_turns: Option<u32>,
+    /// Tool invocations recorded (`tool_call_count`).
+    pub tool_calls: u32,
+    /// Messages exchanged (`message_count`).
+    pub messages: u32,
+    /// Reasoning effort from `model_config` (e.g. "xhigh"), when known.
+    pub effort: Option<String>,
+    /// Provider cost in USD when reported and non-zero; `None` when unknown
+    /// (the common case for Fugu/Sakana — see the struct docs).
+    pub cost_usd: Option<f64>,
+    /// Cost reliability flag from the provider (e.g. "unknown").
+    pub cost_status: Option<String>,
+    /// Why the session ended: "compression", "cli_close", or `None` while live.
+    pub end_reason: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSession {
@@ -163,6 +199,19 @@ pub struct AgentSession {
     pub title_source: TitleSource,
     pub can_rename: bool,
     pub recent_files: Vec<FileEvent>,
+    /// Run-level telemetry (Hermes/Fugu). `None` for Claude/Codex and omitted
+    /// from the JSON payload when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<RunStats>,
+    /// Live process subtree for this agent, attached by the process scanner when
+    /// the session's PID matches a scanned agent root. `None` (and omitted) when
+    /// no scan match was found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_tree: Option<ProcessNode>,
+    /// True only for synthesized cards: a signature-matched process the scanner
+    /// found that has no session card of its own ("running without me knowing").
+    #[serde(default)]
+    pub untracked: bool,
 }
 
 impl AgentSession {
@@ -203,6 +252,9 @@ mod tests {
                 action: FileAction::Editing,
                 at: 1000,
             }],
+            run: None,
+            process_tree: None,
+            untracked: false,
         }
     }
 
@@ -244,6 +296,42 @@ mod tests {
     }
 
     #[test]
+    fn agent_tool_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&Tool::Agent).unwrap(), "\"agent\"");
+    }
+
+    #[test]
+    fn process_tree_omitted_when_absent_and_untracked_defaults_false() {
+        let json = serde_json::to_string(&sample()).unwrap();
+        assert!(
+            !json.contains("processTree"),
+            "process_tree must be omitted when None: {json}"
+        );
+        assert!(json.contains("\"untracked\":false"));
+    }
+
+    #[test]
+    fn process_tree_serializes_to_camel_case_when_present() {
+        use crate::collector::scanner::ProcessNode;
+        let mut session = sample();
+        session.untracked = true;
+        session.process_tree = Some(ProcessNode {
+            pid: 200,
+            command: "/x/bin/hermes -z go".into(),
+            children: vec![ProcessNode {
+                pid: 300,
+                command: "cargo build".into(),
+                children: vec![],
+            }],
+        });
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"processTree\""));
+        assert!(json.contains("\"untracked\":true"));
+        assert!(json.contains("\"pid\":300"));
+        assert!(json.contains("\"children\""));
+    }
+
+    #[test]
     fn file_event_serializes_to_camel_case_for_ui() {
         let event = FileEvent {
             path: "/tmp/notes.rs".into(),
@@ -258,11 +346,40 @@ mod tests {
 
     #[test]
     fn session_serializes_recent_files_and_title_without_cost() {
+        // A Claude/Codex session carries no run telemetry, so the whole `run`
+        // block (and its `costUsd`) is omitted from the payload.
         let json = serde_json::to_string(&sample()).unwrap();
         assert!(json.contains("\"recentFiles\""));
         assert!(json.contains("\"title\""));
         assert!(json.contains("\"titleSource\":\"provider\""));
         assert!(json.contains("\"canRename\":true"));
+        assert!(
+            !json.contains("\"run\""),
+            "run block must be omitted: {json}"
+        );
         assert!(!json.contains("costUsd"), "cost was dropped: {json}");
+    }
+
+    #[test]
+    fn run_stats_serialize_to_camel_case_when_present() {
+        let mut session = sample();
+        session.run = Some(RunStats {
+            turns: 110,
+            max_turns: Some(800),
+            tool_calls: 63,
+            messages: 220,
+            effort: Some("xhigh".into()),
+            cost_usd: None,
+            cost_status: Some("unknown".into()),
+            end_reason: Some("compression".into()),
+        });
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"run\""));
+        assert!(json.contains("\"maxTurns\":800"));
+        assert!(json.contains("\"toolCalls\":63"));
+        assert!(json.contains("\"effort\":\"xhigh\""));
+        assert!(json.contains("\"endReason\":\"compression\""));
+        // costUsd is null here but the key is present under run
+        assert!(json.contains("\"costUsd\":null"));
     }
 }

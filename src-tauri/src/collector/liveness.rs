@@ -86,9 +86,7 @@ pub fn live_codex_pids_by_file() -> HashMap<PathBuf, i32> {
     match output {
         // lsof exits non-zero when some processes can't be inspected, even
         // though the rows we care about are present — trust stdout if non-empty.
-        Ok(out) if !out.stdout.is_empty() => {
-            parse_lsof_pn(&String::from_utf8_lossy(&out.stdout))
-        }
+        Ok(out) if !out.stdout.is_empty() => parse_lsof_pn(&String::from_utf8_lossy(&out.stdout)),
         _ => HashMap::new(),
     }
 }

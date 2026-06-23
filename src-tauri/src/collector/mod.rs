@@ -2,15 +2,21 @@ pub mod adapters;
 pub mod context;
 pub mod liveness;
 pub mod registry;
+pub mod scanner;
 pub mod session;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use rusqlite::{Connection, OpenFlags};
+
 use crate::collector::adapters::{claude, codex, hermes};
 use crate::collector::liveness::{ClaudeStatus, LiveClaude};
-use crate::collector::session::{AgentSession, Status, TitleSource};
+use crate::collector::scanner::ProcessRoot;
+use crate::collector::session::{
+    AgentSession, ContextWindow, FileEvent, Status, TitleSource, Tokens, Tool,
+};
 
 const DEFAULT_ACTIVE_WINDOW_MS: i64 = 10 * 60 * 1000;
 const WORKING_RECENCY_MS: i64 = 90 * 1000;
@@ -25,6 +31,17 @@ struct CacheEntry {
     mtime: i64,
     session: AgentSession,
 }
+
+/// Cached reconstruction of a Hermes session's activity (context window + files
+/// touched). Tokenizing the transcript is the expensive part, so it is recomputed
+/// only when the session's `message_count` changes — an idle-but-visible card
+/// reuses the prior result on every poll.
+struct HermesCacheEntry {
+    message_count: u32,
+    context: Option<ContextWindow>,
+    recent_files: Vec<FileEvent>,
+}
+
 
 /// Live registry of agent sessions, built from on-disk agent logs.
 ///
@@ -44,6 +61,9 @@ pub struct Collector {
     /// dashboard. (Claude/Codex are gated by process liveness instead.)
     active_window_ms: i64,
     cache: Mutex<HashMap<PathBuf, CacheEntry>>,
+    /// Per-session Hermes activity cache, keyed by session id (see
+    /// [`HermesCacheEntry`]).
+    hermes_activity: Mutex<HashMap<String, HermesCacheEntry>>,
 }
 
 impl Collector {
@@ -110,6 +130,7 @@ impl Collector {
             hermes_db,
             active_window_ms,
             cache: Mutex::new(HashMap::new()),
+            hermes_activity: Mutex::new(HashMap::new()),
         }
     }
 
@@ -120,7 +141,13 @@ impl Collector {
         let live_claude = liveness::live_claude_sessions();
         let live_codex = liveness::live_codex_pids_by_file();
         let hermes_pid = liveness::hermes_daemon_pid();
-        self.snapshot_with(now_ms, &live_claude, &live_codex, hermes_pid)
+        let mut sessions = self.snapshot_with(now_ms, &live_claude, &live_codex, hermes_pid);
+        // Overlay the OS process scan: enrich matching cards with their process
+        // tree, and surface signature-matched processes that have no session
+        // card at all as flagged "untracked" cards.
+        correlate_scan(&mut sessions, &scanner::scan_processes(now_ms), now_ms);
+        sessions.sort_by(newest_started_first);
+        sessions
     }
 
     pub fn rename_session(&self, session_id: &str, new_title: &str) -> Result<(), String> {
@@ -279,18 +306,43 @@ impl Collector {
         // old sessions age out even though the daemon lives on. Status is set
         // here, consistent with the Codex branch above.
         if let (Some(db), Some(pid)) = (self.hermes_db.as_ref(), hermes_pid) {
-            for mut session in hermes::snapshot_sessions(db) {
+            let raw = hermes::snapshot_sessions(db);
+            // Hermes runs one session at a time (the `--continue` model), and a
+            // Hermes process is alive right now (we're in the `Some(pid)` arm).
+            // The newest *still-open* session (no `end_reason` yet) is the one it
+            // is driving — exempt it from the recency window so a single long
+            // tool turn, during which neither messages nor token counters move,
+            // doesn't make the active agent vanish and resurface as a bare,
+            // telemetry-less process card.
+            let active_id = raw
+                .iter()
+                .filter(|s| s.run.as_ref().map_or(true, |r| r.end_reason.is_none()))
+                .max_by_key(|s| s.started_at)
+                .map(|s| s.id.clone());
+            for mut session in raw {
                 if !seen.insert(session.id.clone()) {
                     continue;
                 }
                 let age = now_ms - session.last_event_at;
-                if age >= self.active_window_ms {
+                let is_active = active_id.as_deref() == Some(session.id.as_str());
+                if age >= self.active_window_ms && !is_active {
                     continue;
                 }
                 session.pid = Some(pid);
-                session.status = live_status_from_age(age);
+                // The active session is what the live daemon is on, so it is
+                // working even between flushes; others fall back to recency.
+                session.status = if is_active {
+                    Status::Working
+                } else {
+                    live_status_from_age(age)
+                };
                 sessions.push(session);
             }
+
+            // Reconstruct context-window occupancy and files-touched for the
+            // Hermes cards we kept (cheap rows became visible; now do the heavy,
+            // cached tokenization pass for just those).
+            self.enrich_hermes(db, &mut sessions);
         }
 
         // Order by creation time (newest first) so a card holds a fixed slot.
@@ -298,11 +350,114 @@ impl Collector {
         sessions.sort_by(newest_started_first);
         sessions
     }
+
+    /// Fill in `context` and `recent_files` for the Hermes cards in `sessions`.
+    ///
+    /// Opens the state DB once (read-only) and reconstructs each visible Hermes
+    /// session's activity, reusing the cache when the session's `message_count` is
+    /// unchanged so an idle card costs nothing. Silently does nothing if there are
+    /// no Hermes cards or the DB can't be opened.
+    fn enrich_hermes(&self, db: &Path, sessions: &mut [AgentSession]) {
+        if !sessions.iter().any(|s| matches!(s.tool, Tool::Hermes)) {
+            return;
+        }
+        let Ok(conn) = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+            return;
+        };
+        let mut cache = self.hermes_activity.lock().expect("hermes activity cache");
+        let live: HashSet<String> = sessions
+            .iter()
+            .filter(|s| matches!(s.tool, Tool::Hermes))
+            .map(|s| s.id.clone())
+            .collect();
+        cache.retain(|id, _| live.contains(id));
+
+        for session in sessions.iter_mut().filter(|s| matches!(s.tool, Tool::Hermes)) {
+            // `run.messages` carries the session's message_count (set by the adapter).
+            let message_count = session.run.as_ref().map(|r| r.messages).unwrap_or(0);
+            let fresh = match cache.get(&session.id) {
+                Some(entry) => entry.message_count != message_count,
+                None => true,
+            };
+            if fresh {
+                let activity =
+                    hermes::reconstruct_activity(&conn, &session.id, session.model.as_deref());
+                cache.insert(
+                    session.id.clone(),
+                    HermesCacheEntry {
+                        message_count,
+                        context: activity.context,
+                        recent_files: activity.recent_files,
+                    },
+                );
+            }
+            if let Some(entry) = cache.get(&session.id) {
+                session.context = entry.context.clone();
+                session.recent_files = entry.recent_files.clone();
+            }
+        }
+    }
 }
 
 impl Default for Collector {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Overlay the process scan onto the session list.
+///
+/// A scanned root whose PID matches a live session enriches that session with
+/// its process tree (Hermes sessions share the daemon PID, so several cards may
+/// receive the same tree — correct, they *are* that process). A root that
+/// matches no session is a process running without a card of its own: it becomes
+/// a synthesized, flagged "untracked" session.
+fn correlate_scan(sessions: &mut Vec<AgentSession>, roots: &[ProcessRoot], now_ms: i64) {
+    let tracked: HashSet<i32> = sessions.iter().filter_map(|s| s.pid).collect();
+    for root in roots {
+        if tracked.contains(&root.pid) {
+            for session in sessions.iter_mut() {
+                if session.pid == Some(root.pid) {
+                    session.process_tree = Some(root.tree.clone());
+                }
+            }
+        } else {
+            sessions.push(synthesize_untracked(root, now_ms));
+        }
+    }
+}
+
+/// Build a flagged card for a signature-matched process that has no session
+/// store of its own. The id embeds the start time so a reused PID can't collide
+/// with an earlier process's card.
+fn synthesize_untracked(root: &ProcessRoot, now_ms: i64) -> AgentSession {
+    let command = root.tree.command.clone();
+    let binary = command
+        .split_whitespace()
+        .next()
+        .and_then(|exe| exe.rsplit('/').next())
+        .unwrap_or("agent")
+        .to_string();
+    AgentSession {
+        id: format!("proc:{}:{}", root.pid, root.started_at),
+        tool: root.tool,
+        pid: Some(root.pid),
+        project_path: String::new(),
+        branch: None,
+        model: None,
+        status: Status::Working,
+        current_action: Some(command),
+        started_at: root.started_at,
+        last_event_at: now_ms,
+        tokens: Tokens::default(),
+        context: None,
+        title: Some(binary),
+        title_source: TitleSource::Fallback,
+        can_rename: false,
+        recent_files: Vec::new(),
+        run: None,
+        process_tree: Some(root.tree.clone()),
+        untracked: true,
     }
 }
 
@@ -353,7 +508,71 @@ fn collect_jsonl(dir: &Path, out: &mut Vec<(PathBuf, i64)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collector::session::Tool;
+    use crate::collector::scanner::ProcessNode;
+
+    fn root(pid: i32, tool: Tool, command: &str, started_at: i64) -> ProcessRoot {
+        ProcessRoot {
+            pid,
+            ppid: 1,
+            tool,
+            started_at,
+            tree: ProcessNode {
+                pid,
+                command: command.into(),
+                children: vec![ProcessNode {
+                    pid: pid + 1,
+                    command: "cargo build".into(),
+                    children: vec![],
+                }],
+            },
+        }
+    }
+
+    #[test]
+    fn correlate_scan_enriches_matching_session_with_tree() {
+        let mut sessions = vec![session_with("s1", 0, 0)];
+        sessions[0].pid = Some(4321);
+        let roots = vec![root(4321, Tool::Hermes, "/x/bin/hermes -z go", 500)];
+        correlate_scan(&mut sessions, &roots, 1_000);
+        assert_eq!(sessions.len(), 1, "no untracked card for a matched pid");
+        let tree = sessions[0].process_tree.as_ref().expect("tree attached");
+        assert_eq!(tree.pid, 4321);
+        assert_eq!(tree.children[0].command, "cargo build");
+        assert!(!sessions[0].untracked);
+    }
+
+    #[test]
+    fn correlate_scan_synthesizes_untracked_card_for_unmatched_root() {
+        let mut sessions: Vec<AgentSession> = Vec::new();
+        let roots = vec![root(59421, Tool::Hermes, "/x/bin/hermes -z build", 200)];
+        correlate_scan(&mut sessions, &roots, 9_000);
+        assert_eq!(sessions.len(), 1);
+        let s = &sessions[0];
+        assert_eq!(s.id, "proc:59421:200");
+        assert!(s.untracked);
+        assert_eq!(s.pid, Some(59421));
+        assert!(matches!(s.tool, Tool::Hermes));
+        assert_eq!(s.title.as_deref(), Some("hermes"));
+        assert_eq!(s.current_action.as_deref(), Some("/x/bin/hermes -z build"));
+        assert_eq!(s.started_at, 200);
+        assert!(s.process_tree.is_some());
+    }
+
+    #[test]
+    fn correlate_scan_does_not_duplicate_when_one_of_many_pids_matches() {
+        // Two sessions, only one shares the scanned pid: the other is untouched
+        // and no untracked card appears.
+        let mut a = session_with("a", 0, 0);
+        a.pid = Some(100);
+        let mut b = session_with("b", 0, 0);
+        b.pid = Some(200);
+        let mut sessions = vec![a, b];
+        let roots = vec![root(100, Tool::Claude, "claude", 0)];
+        correlate_scan(&mut sessions, &roots, 1_000);
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions[0].process_tree.is_some());
+        assert!(sessions[1].process_tree.is_none());
+    }
 
     fn claude_fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/claude")
@@ -524,9 +743,12 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE sessions (
                  id TEXT PRIMARY KEY, source TEXT NOT NULL, model TEXT,
-                 started_at REAL NOT NULL, ended_at REAL,
+                 model_config TEXT,
+                 started_at REAL NOT NULL, ended_at REAL, end_reason TEXT,
                  input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
                  cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0,
+                 message_count INTEGER DEFAULT 0, api_call_count INTEGER DEFAULT 0,
+                 estimated_cost_usd REAL, actual_cost_usd REAL, cost_status TEXT,
                  cwd TEXT, title TEXT, tool_call_count INTEGER NOT NULL DEFAULT 0,
                  archived INTEGER NOT NULL DEFAULT 0
              );
@@ -576,8 +798,34 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_omits_hermes_session_aged_out_of_window() {
+    fn hermes_keeps_newest_open_session_alive_during_a_long_tool_turn() {
+        // The active agent: its newest message is well past the window (a single
+        // long tool turn flushes nothing), but the session is still open and a
+        // Hermes process is alive — so it must stay visible and Working, not age
+        // out into a bare process card.
+        let db = hermes_db("active", 1_000.0, 1_000.0); // last_event_at = 1_000_000 ms
+        let collector = Collector::with_hermes_db(db, DEFAULT_ACTIVE_WINDOW_MS);
+        let now = 1_000_000 + 30 * 60 * 1000; // 30 min of silent tool work
+        let sessions = collector.snapshot_with(now, &HashMap::new(), &HashMap::new(), Some(4321));
+        let found = sessions
+            .iter()
+            .find(|s| s.id == "herm-1")
+            .expect("newest open session stays while the daemon is alive");
+        assert!(matches!(found.status, Status::Working));
+    }
+
+    #[test]
+    fn snapshot_omits_finished_hermes_session_aged_out_of_window() {
+        // A *finished* session (it has an end_reason) is no longer the active one,
+        // so once it falls outside the window it ages out as before.
         let db = hermes_db("aged", 1_000.0, 1_000.0);
+        Connection::open(&db)
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET end_reason = 'cli_close' WHERE id = 'herm-1'",
+                [],
+            )
+            .unwrap();
         let collector = Collector::with_hermes_db(db, DEFAULT_ACTIVE_WINDOW_MS);
         let now = 1_000_000 + 20 * 60 * 1000; // 20 min later -> outside 10-min window
         let sessions = collector.snapshot_with(now, &HashMap::new(), &HashMap::new(), Some(4321));

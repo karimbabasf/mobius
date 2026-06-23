@@ -14,7 +14,7 @@ use crate::collector::adapters::claude::{action_phrase, basename, classify_bash,
 use crate::collector::context::{self, OccupancyRaw, SegmentAccumulator};
 use crate::collector::session::{
     AgentSession, Compaction, ContextCategory, ContextSnapshot, FileAction, FileEvent, LimitSource,
-    Status, Tokens, Tool,
+    Status, TitleSource, Tokens, Tool,
 };
 
 /// Parse one Codex rollout log into a normalized session (title is provisional;
@@ -107,7 +107,11 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                                 if let Ok(parsed) = serde_json::from_str::<Value>(args) {
                                     if let Some(cmd) = parsed.get("cmd").and_then(|v| v.as_str()) {
                                         let (action, target) = classify_bash(cmd);
-                                        files.push(FileEvent { path: target, action, at: ts });
+                                        files.push(FileEvent {
+                                            path: target,
+                                            action,
+                                            at: ts,
+                                        });
                                     }
                                 }
                             }
@@ -180,7 +184,12 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
         last_event_at: when,
         tokens,
         context: Some(context_window),
+        title_source: TitleSource::Fallback,
+        can_rename: false,
         recent_files: files,
+        run: None,
+        process_tree: None,
+        untracked: false,
     })
 }
 
@@ -208,6 +217,41 @@ pub fn load_thread_names(index_path: &Path) -> HashMap<String, String> {
         }
     }
     names
+}
+
+pub fn rename_thread_name(
+    index_path: &Path,
+    session_id: &str,
+    new_title: &str,
+) -> Result<(), String> {
+    let new_title = new_title.trim();
+    if new_title.is_empty() {
+        return Err("Agent name cannot be empty.".into());
+    }
+
+    let content = std::fs::read_to_string(index_path).map_err(|err| err.to_string())?;
+    let mut changed = false;
+    let mut lines = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut value: Value = serde_json::from_str(line).map_err(|err| err.to_string())?;
+        if value.get("id").and_then(|v| v.as_str()) == Some(session_id) {
+            value["thread_name"] = Value::String(new_title.to_string());
+            changed = true;
+        }
+        lines.push(serde_json::to_string(&value).map_err(|err| err.to_string())?);
+    }
+
+    if !changed {
+        return Err("Codex session name was not found.".into());
+    }
+
+    let mut next = lines.join("\n");
+    next.push('\n');
+    std::fs::write(index_path, next).map_err(|err| err.to_string())
 }
 
 /// Capture Layer-1 occupancy from a `token_count` payload's `info` object: the
@@ -257,7 +301,10 @@ fn capture_occupancy(
 /// Flatten a Codex `message` payload's `content` array into plain text.
 fn message_text(content: Option<&Value>) -> String {
     let Some(Value::Array(blocks)) = content else {
-        return content.and_then(|v| v.as_str()).map(String::from).unwrap_or_default();
+        return content
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_default();
     };
     let mut out = String::new();
     for block in blocks {
@@ -296,6 +343,12 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/fixtures/codex")
             .join(name)
+    }
+
+    fn temp_index_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mobius-{}-{}", name, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("session_index.jsonl")
     }
 
     #[test]
@@ -350,9 +403,15 @@ mod tests {
     fn context_infers_compaction_from_occupancy_drop() {
         let s = parse_session(&fixture("rollout-context.jsonl")).unwrap();
         let ctx = s.context.unwrap();
-        assert_eq!(ctx.history.iter().map(|h| h.used).collect::<Vec<_>>(), vec![120_000, 200_000, 70_000]);
+        assert_eq!(
+            ctx.history.iter().map(|h| h.used).collect::<Vec<_>>(),
+            vec![120_000, 200_000, 70_000]
+        );
         assert_eq!(ctx.compactions.len(), 1);
-        assert!(!ctx.compactions[0].explicit, "Codex compaction is inferred, not explicit");
+        assert!(
+            !ctx.compactions[0].explicit,
+            "Codex compaction is inferred, not explicit"
+        );
         assert_eq!(ctx.compactions[0].pre_tokens, Some(200_000));
         let sum: u64 = ctx.categories.iter().map(|c| c.tokens).sum();
         assert_eq!(sum, ctx.used);
@@ -361,7 +420,45 @@ mod tests {
     #[test]
     fn load_thread_names_maps_id_to_title() {
         let names = load_thread_names(&fixture("session_index.jsonl"));
-        assert_eq!(names.get("codex-1").map(String::as_str), Some("Build the thing"));
-        assert_eq!(names.get("other-9").map(String::as_str), Some("Unrelated session"));
+        assert_eq!(
+            names.get("codex-1").map(String::as_str),
+            Some("Build the thing")
+        );
+        assert_eq!(
+            names.get("other-9").map(String::as_str),
+            Some("Unrelated session")
+        );
+    }
+
+    #[test]
+    fn rename_thread_name_updates_matching_record_and_preserves_jsonl() {
+        let index = temp_index_path("codex-rename-supported");
+        std::fs::copy(fixture("session_index.jsonl"), &index).unwrap();
+
+        rename_thread_name(&index, "codex-1", "Renamed Codex Thread").unwrap();
+
+        let names = load_thread_names(&index);
+        assert_eq!(
+            names.get("codex-1").map(String::as_str),
+            Some("Renamed Codex Thread")
+        );
+        assert_eq!(
+            names.get("other-9").map(String::as_str),
+            Some("Unrelated session")
+        );
+        let content = std::fs::read_to_string(&index).unwrap();
+        assert!(content
+            .lines()
+            .all(|line| serde_json::from_str::<Value>(line).is_ok()));
+    }
+
+    #[test]
+    fn rename_thread_name_rejects_unknown_session() {
+        let index = temp_index_path("codex-rename-missing");
+        std::fs::copy(fixture("session_index.jsonl"), &index).unwrap();
+
+        assert!(rename_thread_name(&index, "missing", "Nope").is_err());
+        let names = load_thread_names(&index);
+        assert!(!names.values().any(|name| name == "Nope"));
     }
 }

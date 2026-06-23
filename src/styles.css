@@ -18,6 +18,7 @@
   --codex: #70b7ff;
   --cursor: #66d68f;
   --hermes: #c0a7ff;
+  --agent: #ff8a6b;
   --accent: var(--brew);
   color: var(--text);
   background: var(--bg);
@@ -213,6 +214,14 @@ dd {
   --provider-accent: var(--cursor);
 }
 
+.telemetry__provider[data-provider="hermes"] {
+  --provider-accent: var(--hermes);
+}
+
+.telemetry__provider[data-provider="agent"] {
+  --provider-accent: var(--agent);
+}
+
 .telemetry__provider strong {
   color: var(--provider-accent);
 }
@@ -297,6 +306,40 @@ dd {
 
 .agent-block[data-tool="hermes"] {
   --accent: var(--hermes);
+}
+
+.agent-block[data-tool="agent"] {
+  --accent: var(--agent);
+}
+
+/* Untracked agents — caught by the scanner, no session card of their own.
+   Tinted edge + faint wash so a surprise reads as an alert in the grid. */
+.agent-block[data-untracked="true"] {
+  border-color: color-mix(in srgb, var(--agent) 55%, var(--line));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--agent) 70%, transparent);
+}
+
+.agent-block[data-untracked="true"]::before {
+  background-image: linear-gradient(
+    120deg,
+    color-mix(in srgb, var(--agent) 10%, transparent) 0%,
+    transparent 34%
+  );
+}
+
+.agent-block__untracked {
+  align-self: center;
+  justify-self: start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--agent);
+  background: color-mix(in srgb, var(--agent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--agent) 40%, transparent);
+  white-space: nowrap;
 }
 
 .agent-block:hover,
@@ -711,9 +754,199 @@ dd {
   overflow-wrap: anywhere;
 }
 
+/* ----- Run telemetry (Hermes/Fugu autonomous builds) ----- */
+.agent-block__panel--run {
+  border-color: rgba(102, 214, 143, 0.32);
+  background: rgba(15, 24, 19, 0.6);
+}
+
+.run-outcome {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.run-outcome__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dim);
+  flex: none;
+}
+
+.run-outcome[data-state="live"] .run-outcome__dot {
+  background: var(--brew, #66d68f);
+  box-shadow: 0 0 0 3px rgba(102, 214, 143, 0.2);
+  animation: run-pulse 1.6s ease-in-out infinite;
+}
+
+.run-outcome[data-state="chained"] .run-outcome__dot {
+  background: #e6b450;
+}
+
+.run-outcome[data-state="ended"] .run-outcome__dot {
+  background: var(--muted);
+}
+
+@keyframes run-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.run-outcome__effort {
+  margin-left: auto;
+  padding: 1px 7px;
+  border: 1px solid rgba(102, 214, 143, 0.42);
+  border-radius: 999px;
+  color: var(--brew, #66d68f);
+  font-size: 0.62rem;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.run-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.run-grid div {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--terminal-2);
+}
+
+.run-grid dt {
+  color: var(--dim);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.run-grid dd {
+  margin: 2px 0 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-grid dd small {
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 600;
+}
+
+.run-bar {
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(102, 214, 143, 0.14);
+  overflow: hidden;
+}
+
+.run-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brew, #66d68f);
+}
+
+.run-cost {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.run-cost b {
+  color: var(--dim);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .tool-logo {
   display: inline-flex;
   color: var(--accent);
+}
+
+/* ----- Process tree (scanner) ----- */
+.process-tree,
+.process-tree__children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.process-tree__children {
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+}
+
+.process-tree__node {
+  margin: 2px 0;
+}
+
+.process-tree__row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.72rem;
+}
+
+.process-tree__pid {
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.process-tree__name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.process-tree__cmd {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-kill {
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 42%, transparent);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.process-kill:hover {
+  background: color-mix(in srgb, var(--red) 22%, transparent);
+  border-color: color-mix(in srgb, var(--red) 64%, transparent);
 }
 
 /* ----- Rename ----- */
@@ -992,7 +1225,7 @@ dd {
 .log__row,
 .log__empty {
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr) auto;
+  grid-template-columns: 74px minmax(0, 1fr) auto auto;
   gap: 9px;
   align-items: center;
   padding: 8px 10px;
@@ -1023,6 +1256,35 @@ dd {
 .log__time {
   color: var(--dim);
   font-variant-numeric: tabular-nums;
+}
+
+.log__raw {
+  justify-self: end;
+  color: var(--dim);
+  font-size: 0.68rem;
+}
+
+.log__raw summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.log__raw[open] {
+  grid-column: 2 / -1;
+  justify-self: stretch;
+}
+
+.log__raw code {
+  display: block;
+  margin-top: 6px;
+  padding: 7px 8px;
+  border: 1px solid rgba(93, 105, 99, 0.38);
+  background: rgba(3, 4, 4, 0.6);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .log__caret {

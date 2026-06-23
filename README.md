@@ -1,6 +1,6 @@
-# Agent Mission Control
+# MOBIUS
 
-Agent Mission Control is a macOS desktop app for observing local AI coding
+MOBIUS is a macOS desktop app for observing local AI coding
 agents in one live view.
 
 ## Development

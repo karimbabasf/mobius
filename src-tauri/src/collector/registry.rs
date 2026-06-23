@@ -45,7 +45,7 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collector::session::{AgentSession, Status, Tokens, Tool};
+    use crate::collector::session::{AgentSession, Status, TitleSource, Tokens, Tool};
 
     fn sample(id: &str) -> AgentSession {
         AgentSession {
@@ -66,7 +66,12 @@ mod tests {
             },
             context: None,
             title: Some("demo".into()),
+            title_source: TitleSource::Provider,
+            can_rename: false,
             recent_files: vec![],
+            run: None,
+            process_tree: None,
+            untracked: false,
         }
     }
 

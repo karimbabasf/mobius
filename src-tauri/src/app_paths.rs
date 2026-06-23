@@ -5,7 +5,7 @@ fn home() -> PathBuf {
 }
 
 pub fn data_dir() -> PathBuf {
-    home().join("Library/Application Support/AgentMissionControl")
+    home().join("Library/Application Support/Mobius")
 }
 
 pub fn db_path() -> PathBuf {
@@ -36,10 +36,7 @@ mod tests {
     fn data_dir_is_under_app_support_and_named_correctly() {
         let d = data_dir();
         let s = d.to_string_lossy();
-        assert!(
-            s.contains("Library/Application Support/AgentMissionControl"),
-            "got {s}"
-        );
+        assert!(s.contains("Library/Application Support/Mobius"), "got {s}");
     }
 
     #[test]

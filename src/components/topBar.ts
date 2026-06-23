@@ -6,9 +6,10 @@ const providerLabels: Record<Tool, string> = {
   codex: "Codex",
   cursor: "Cursor",
   hermes: "Hermes",
+  agent: "Agent",
 };
 
-const providerOrder: Tool[] = ["claude", "codex", "cursor", "hermes"];
+const providerOrder: Tool[] = ["claude", "codex", "cursor", "hermes", "agent"];
 
 function totalTokens(sessions: AgentSession[]): number {
   return sessions.reduce(

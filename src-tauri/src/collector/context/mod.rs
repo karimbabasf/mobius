@@ -64,6 +64,21 @@ impl SegmentAccumulator {
             self.tool_defs_set = true;
         }
     }
+
+    /// Total tokens across every category buffer.
+    ///
+    /// Adapters whose provider does *not* report an occupancy figure (Hermes —
+    /// `messages.token_count` is always NULL) tokenize the in-context transcript
+    /// themselves and use this sum as the authoritative `used`. Passing this same
+    /// value as [`OccupancyRaw::used`] makes [`build`]'s normalization an identity
+    /// (`scale == 1`), so the Layer-2 breakdown sums to it exactly.
+    pub fn total_tokens(&self) -> u64 {
+        (count_tokens(&self.system)
+            + count_tokens(&self.tool_defs)
+            + count_tokens(&self.memory)
+            + count_tokens(&self.file_reads)
+            + count_tokens(&self.conversation)) as u64
+    }
 }
 
 /// Static context-window limit for a Claude model. Claude transcripts never carry
@@ -128,11 +143,31 @@ pub fn build(
             count_tokens(&seg.tool_defs) as u64
         };
         let raw: [(ContextCategory, u64, bool); 5] = [
-            (ContextCategory::SystemInstructions, count_tokens(&seg.system) as u64, false),
-            (ContextCategory::ToolDefinitions, tool_tokens, tooldef_estimate > 0),
-            (ContextCategory::Memory, count_tokens(&seg.memory) as u64, false),
-            (ContextCategory::FileReads, count_tokens(&seg.file_reads) as u64, false),
-            (ContextCategory::Conversation, count_tokens(&seg.conversation) as u64, false),
+            (
+                ContextCategory::SystemInstructions,
+                count_tokens(&seg.system) as u64,
+                false,
+            ),
+            (
+                ContextCategory::ToolDefinitions,
+                tool_tokens,
+                tooldef_estimate > 0,
+            ),
+            (
+                ContextCategory::Memory,
+                count_tokens(&seg.memory) as u64,
+                false,
+            ),
+            (
+                ContextCategory::FileReads,
+                count_tokens(&seg.file_reads) as u64,
+                false,
+            ),
+            (
+                ContextCategory::Conversation,
+                count_tokens(&seg.conversation) as u64,
+                false,
+            ),
         ];
         let raw_sum: u64 = raw.iter().map(|(_, t, _)| *t).sum();
 
@@ -150,7 +185,11 @@ pub fn build(
                     continue;
                 }
                 scaled_sum += scaled;
-                categories.push(CategorySlice { name: cat, tokens: scaled, estimated });
+                categories.push(CategorySlice {
+                    name: cat,
+                    tokens: scaled,
+                    estimated,
+                });
             }
         }
         residual = occ.used.saturating_sub(scaled_sum);
@@ -226,38 +265,91 @@ mod tests {
     use super::*;
 
     fn occ(used: u64, cached: u64, limit: Option<u64>) -> OccupancyRaw {
-        OccupancyRaw { used, cached, limit, limit_source: LimitSource::Reported }
+        OccupancyRaw {
+            used,
+            cached,
+            limit,
+            limit_source: LimitSource::Reported,
+        }
     }
 
     #[test]
     fn fill_pct_and_fresh_are_derived() {
-        let cw = build(occ(50_000, 40_000, Some(200_000)), &SegmentAccumulator::default(), vec![], vec![], 0, false);
+        let cw = build(
+            occ(50_000, 40_000, Some(200_000)),
+            &SegmentAccumulator::default(),
+            vec![],
+            vec![],
+            0,
+            false,
+        );
         assert_eq!(cw.fresh, 10_000);
         assert!((cw.fill_pct.unwrap() - 25.0).abs() < 0.01);
     }
 
     #[test]
     fn unknown_limit_yields_no_pct() {
-        let cw = build(occ(50_000, 0, None), &SegmentAccumulator::default(), vec![], vec![], 0, false);
+        let cw = build(
+            occ(50_000, 0, None),
+            &SegmentAccumulator::default(),
+            vec![],
+            vec![],
+            0,
+            false,
+        );
         assert!(cw.fill_pct.is_none());
     }
 
     #[test]
     fn categories_sum_exactly_to_used() {
         let mut seg = SegmentAccumulator::default();
-        seg.push(ContextCategory::SystemInstructions, "you are a helpful assistant");
-        seg.push(ContextCategory::Conversation, &"some conversation text ".repeat(40));
-        seg.push(ContextCategory::FileReads, &"file contents here ".repeat(80));
-        let cw = build(occ(120_000, 90_000, Some(200_000)), &seg, vec![], vec![], 13_000, true);
+        seg.push(
+            ContextCategory::SystemInstructions,
+            "you are a helpful assistant",
+        );
+        seg.push(
+            ContextCategory::Conversation,
+            &"some conversation text ".repeat(40),
+        );
+        seg.push(
+            ContextCategory::FileReads,
+            &"file contents here ".repeat(80),
+        );
+        let cw = build(
+            occ(120_000, 90_000, Some(200_000)),
+            &seg,
+            vec![],
+            vec![],
+            13_000,
+            true,
+        );
         let sum: u64 = cw.categories.iter().map(|c| c.tokens).sum();
-        assert_eq!(sum, cw.used, "categories must reconcile to the authoritative total");
-        assert!(cw.categories.iter().any(|c| matches!(c.name, ContextCategory::ToolDefinitions) && c.estimated));
+        assert_eq!(
+            sum, cw.used,
+            "categories must reconcile to the authoritative total"
+        );
+        assert!(cw
+            .categories
+            .iter()
+            .any(|c| matches!(c.name, ContextCategory::ToolDefinitions) && c.estimated));
     }
 
     #[test]
     fn history_caps_at_twenty_keeping_newest() {
-        let history: Vec<ContextSnapshot> = (0..30).map(|i| ContextSnapshot { at: i, used: i as u64 }).collect();
-        let cw = build(occ(1, 0, None), &SegmentAccumulator::default(), history, vec![], 0, false);
+        let history: Vec<ContextSnapshot> = (0..30)
+            .map(|i| ContextSnapshot {
+                at: i,
+                used: i as u64,
+            })
+            .collect();
+        let cw = build(
+            occ(1, 0, None),
+            &SegmentAccumulator::default(),
+            history,
+            vec![],
+            0,
+            false,
+        );
         assert_eq!(cw.history.len(), 20);
         assert_eq!(cw.history.first().unwrap().at, 10);
         assert_eq!(cw.history.last().unwrap().at, 29);

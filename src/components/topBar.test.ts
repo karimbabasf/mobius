@@ -17,6 +17,8 @@ function session(partial: Partial<AgentSession>): AgentSession {
     tokens: { input: 0, output: 0, cache: 0 },
     context: null,
     title: null,
+    titleSource: "fallback",
+    canRename: false,
     recentFiles: [],
     ...partial,
   };
@@ -47,5 +49,18 @@ describe("renderTopBar", () => {
 
     expect(html).toContain("tokens");
     expect(html).toContain("2.0k");
+  });
+
+  it("breaks down visible sessions by provider", () => {
+    const html = renderTopBar([
+      session({ id: "c1", tool: "claude" }),
+      session({ id: "c2", tool: "claude" }),
+      session({ id: "x1", tool: "codex" }),
+    ]);
+
+    expect(html).toContain("Claude");
+    expect(html).toContain("Codex");
+    expect(html).toContain('data-provider="claude"');
+    expect(html).toContain('data-provider="codex"');
   });
 });
