@@ -237,7 +237,10 @@ mod tests {
 
     #[test]
     fn parse_etime_hours_minutes_seconds() {
-        assert_eq!(parse_etime("02:03:04"), Some((2 * 3600 + 3 * 60 + 4) * 1000));
+        assert_eq!(
+            parse_etime("02:03:04"),
+            Some((2 * 3600 + 3 * 60 + 4) * 1000)
+        );
     }
 
     #[test]
@@ -264,7 +267,10 @@ mod tests {
         let r = &records[0];
         assert_eq!(r.pid, 59421);
         assert_eq!(r.ppid, 59417);
-        assert_eq!(r.command, "/Users/x/.hermes/abc/bin/hermes -z build the thing");
+        assert_eq!(
+            r.command,
+            "/Users/x/.hermes/abc/bin/hermes -z build the thing"
+        );
         assert_eq!(r.started_at, now - 60_000);
     }
 
@@ -294,7 +300,10 @@ mod tests {
     #[test]
     fn match_tool_matches_generic_agents_by_argv0_only() {
         assert_eq!(match_tool("ollama serve"), Some(Tool::Agent));
-        assert_eq!(match_tool("/usr/local/bin/aider --model x"), Some(Tool::Agent));
+        assert_eq!(
+            match_tool("/usr/local/bin/aider --model x"),
+            Some(Tool::Agent)
+        );
         // A stray agent-named *argument* must not trip the match.
         assert_eq!(match_tool("git commit -m goose"), None);
     }
@@ -326,7 +335,10 @@ mod tests {
     fn match_tool_ignores_non_agents() {
         assert_eq!(match_tool("cargo run --example snapshot"), None);
         assert_eq!(match_tool("node /app/server.js"), None);
-        assert_eq!(match_tool("/Applications/MOBIUS.app/Contents/MacOS/MOBIUS"), None);
+        assert_eq!(
+            match_tool("/Applications/MOBIUS.app/Contents/MacOS/MOBIUS"),
+            None
+        );
         assert_eq!(match_tool(""), None);
     }
 
@@ -335,10 +347,30 @@ mod tests {
         // zsh wrapper (not a match) -> hermes (match) -> cargo + git children.
         let now = 0;
         let records = vec![
-            ProcRecord { pid: 100, ppid: 1, started_at: now, command: "-zsh".into() },
-            ProcRecord { pid: 200, ppid: 100, started_at: now, command: "/x/.hermes/v/bin/hermes -z go".into() },
-            ProcRecord { pid: 300, ppid: 200, started_at: now, command: "cargo build".into() },
-            ProcRecord { pid: 301, ppid: 200, started_at: now, command: "git status".into() },
+            ProcRecord {
+                pid: 100,
+                ppid: 1,
+                started_at: now,
+                command: "-zsh".into(),
+            },
+            ProcRecord {
+                pid: 200,
+                ppid: 100,
+                started_at: now,
+                command: "/x/.hermes/v/bin/hermes -z go".into(),
+            },
+            ProcRecord {
+                pid: 300,
+                ppid: 200,
+                started_at: now,
+                command: "cargo build".into(),
+            },
+            ProcRecord {
+                pid: 301,
+                ppid: 200,
+                started_at: now,
+                command: "git status".into(),
+            },
         ];
         let roots = build_roots(&records);
         assert_eq!(roots.len(), 1);
@@ -354,8 +386,18 @@ mod tests {
         // A hermes subagent that is itself a hermes process must not be a second
         // root — it belongs to the parent hermes' subtree.
         let records = vec![
-            ProcRecord { pid: 200, ppid: 1, started_at: 0, command: "/x/.hermes/v/bin/hermes -z go".into() },
-            ProcRecord { pid: 250, ppid: 200, started_at: 0, command: "/x/.hermes/v/bin/hermes --sub".into() },
+            ProcRecord {
+                pid: 200,
+                ppid: 1,
+                started_at: 0,
+                command: "/x/.hermes/v/bin/hermes -z go".into(),
+            },
+            ProcRecord {
+                pid: 250,
+                ppid: 200,
+                started_at: 0,
+                command: "/x/.hermes/v/bin/hermes --sub".into(),
+            },
         ];
         let roots = build_roots(&records);
         assert_eq!(roots.len(), 1);
@@ -367,11 +409,24 @@ mod tests {
     #[test]
     fn build_roots_returns_multiple_independent_roots_sorted() {
         let records = vec![
-            ProcRecord { pid: 800, ppid: 1, started_at: 0, command: "ollama serve".into() },
-            ProcRecord { pid: 200, ppid: 1, started_at: 0, command: "/x/.hermes/v/bin/hermes".into() },
+            ProcRecord {
+                pid: 800,
+                ppid: 1,
+                started_at: 0,
+                command: "ollama serve".into(),
+            },
+            ProcRecord {
+                pid: 200,
+                ppid: 1,
+                started_at: 0,
+                command: "/x/.hermes/v/bin/hermes".into(),
+            },
         ];
         let roots = build_roots(&records);
-        assert_eq!(roots.iter().map(|r| r.pid).collect::<Vec<_>>(), vec![200, 800]);
+        assert_eq!(
+            roots.iter().map(|r| r.pid).collect::<Vec<_>>(),
+            vec![200, 800]
+        );
         assert_eq!(roots[0].tool, Tool::Hermes);
         assert_eq!(roots[1].tool, Tool::Agent);
     }

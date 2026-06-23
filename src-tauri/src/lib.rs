@@ -96,7 +96,11 @@ mod tests {
             seen.push(pid);
             pid != 20 // pretend 20 was already dead
         });
-        assert_eq!(seen, vec![10, 20, 30], "killer invoked once per pid, in order");
+        assert_eq!(
+            seen,
+            vec![10, 20, 30],
+            "killer invoked once per pid, in order"
+        );
         assert_eq!(
             results,
             vec![
