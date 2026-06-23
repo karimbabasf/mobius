@@ -450,6 +450,21 @@ dd {
   font-style: normal;
 }
 
+.agent-block__connection {
+  max-width: 190px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .agent-block__name {
   min-width: 0;
   color: var(--text);
@@ -716,11 +731,73 @@ dd {
 
 .agent-block__panel h3 {
   margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.info-tip {
+  position: relative;
+  width: 17px;
+  height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(93, 105, 99, 0.45);
+  border-radius: 50%;
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 0.62rem;
+  font-style: normal;
+  line-height: 1;
+  text-transform: none;
+  cursor: help;
+}
+
+.info-tip__bubble {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(260px, 70vw);
+  padding: 8px 10px;
+  border: 1px solid rgba(93, 105, 99, 0.55);
+  border-radius: 5px;
+  color: var(--text);
+  background: #101412;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.34);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.35;
+  text-align: left;
+  text-transform: none;
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.info-tip:hover,
+.info-tip:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  outline: none;
+}
+
+.info-tip:hover .info-tip__bubble,
+.info-tip:focus-visible .info-tip__bubble {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .agent-block__details {
@@ -751,6 +828,12 @@ dd {
 .agent-block__id {
   color: var(--dim);
   font-size: 0.7rem;
+  overflow-wrap: anywhere;
+}
+
+.rename-box--readonly strong {
+  color: var(--text);
+  font-size: 0.78rem;
   overflow-wrap: anywhere;
 }
 

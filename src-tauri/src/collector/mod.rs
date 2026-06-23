@@ -37,11 +37,10 @@ struct CacheEntry {
 /// only when the session's `message_count` changes — an idle-but-visible card
 /// reuses the prior result on every poll.
 struct HermesCacheEntry {
-    message_count: u32,
+    activity_version: hermes::HermesActivityVersion,
     context: Option<ContextWindow>,
     recent_files: Vec<FileEvent>,
 }
-
 
 /// Live registry of agent sessions, built from on-disk agent logs.
 ///
@@ -319,13 +318,18 @@ impl Collector {
                 .filter(|s| s.run.as_ref().map_or(true, |r| r.end_reason.is_none()))
                 .max_by_key(|s| s.started_at)
                 .map(|s| s.id.clone());
+            let active_family = active_id
+                .as_deref()
+                .map(|id| hermes_ancestor_chain(id, &raw))
+                .unwrap_or_default();
             for mut session in raw {
                 if !seen.insert(session.id.clone()) {
                     continue;
                 }
                 let age = now_ms - session.last_event_at;
                 let is_active = active_id.as_deref() == Some(session.id.as_str());
-                if age >= self.active_window_ms && !is_active {
+                let is_active_family = active_family.contains(&session.id);
+                if age >= self.active_window_ms && !is_active_family {
                     continue;
                 }
                 session.pid = Some(pid);
@@ -372,11 +376,13 @@ impl Collector {
             .collect();
         cache.retain(|id, _| live.contains(id));
 
-        for session in sessions.iter_mut().filter(|s| matches!(s.tool, Tool::Hermes)) {
-            // `run.messages` carries the session's message_count (set by the adapter).
-            let message_count = session.run.as_ref().map(|r| r.messages).unwrap_or(0);
+        for session in sessions
+            .iter_mut()
+            .filter(|s| matches!(s.tool, Tool::Hermes))
+        {
+            let activity_version = hermes::activity_version(&conn, &session.id);
             let fresh = match cache.get(&session.id) {
-                Some(entry) => entry.message_count != message_count,
+                Some(entry) => entry.activity_version != activity_version,
                 None => true,
             };
             if fresh {
@@ -385,7 +391,7 @@ impl Collector {
                 cache.insert(
                     session.id.clone(),
                     HermesCacheEntry {
-                        message_count,
+                        activity_version,
                         context: activity.context,
                         recent_files: activity.recent_files,
                     },
@@ -397,6 +403,27 @@ impl Collector {
             }
         }
     }
+}
+
+fn hermes_ancestor_chain(active_id: &str, sessions: &[AgentSession]) -> HashSet<String> {
+    let parents: HashMap<&str, &str> = sessions
+        .iter()
+        .filter_map(|session| {
+            session
+                .parent_session_id
+                .as_deref()
+                .map(|parent| (session.id.as_str(), parent))
+        })
+        .collect();
+    let mut out = HashSet::new();
+    let mut current = active_id;
+    while out.insert(current.to_string()) {
+        let Some(parent) = parents.get(current).copied() else {
+            break;
+        };
+        current = parent;
+    }
+    out
 }
 
 impl Default for Collector {
@@ -432,12 +459,6 @@ fn correlate_scan(sessions: &mut Vec<AgentSession>, roots: &[ProcessRoot], now_m
 /// with an earlier process's card.
 fn synthesize_untracked(root: &ProcessRoot, now_ms: i64) -> AgentSession {
     let command = root.tree.command.clone();
-    let binary = command
-        .split_whitespace()
-        .next()
-        .and_then(|exe| exe.rsplit('/').next())
-        .unwrap_or("agent")
-        .to_string();
     AgentSession {
         id: format!("proc:{}:{}", root.pid, root.started_at),
         tool: root.tool,
@@ -451,10 +472,13 @@ fn synthesize_untracked(root: &ProcessRoot, now_ms: i64) -> AgentSession {
         last_event_at: now_ms,
         tokens: Tokens::default(),
         context: None,
-        title: Some(binary),
+        title: None,
         title_source: TitleSource::Fallback,
         can_rename: false,
         recent_files: Vec::new(),
+        parent_session_id: None,
+        connection_role: None,
+        child_count: 0,
         run: None,
         process_tree: Some(root.tree.clone()),
         untracked: true,
@@ -552,7 +576,7 @@ mod tests {
         assert!(s.untracked);
         assert_eq!(s.pid, Some(59421));
         assert!(matches!(s.tool, Tool::Hermes));
-        assert_eq!(s.title.as_deref(), Some("hermes"));
+        assert!(s.title.is_none());
         assert_eq!(s.current_action.as_deref(), Some("/x/bin/hermes -z build"));
         assert_eq!(s.started_at, 200);
         assert!(s.process_tree.is_some());
@@ -772,6 +796,64 @@ mod tests {
         path
     }
 
+    fn hermes_family_db(tag: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mobius-collector-hermes-family-{}-{}.db",
+            std::process::id(),
+            tag
+        ));
+        let _ = std::fs::remove_file(&path);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                 id TEXT PRIMARY KEY, source TEXT NOT NULL, model TEXT,
+                 model_config TEXT, system_prompt TEXT, parent_session_id TEXT,
+                 started_at REAL NOT NULL, ended_at REAL, end_reason TEXT,
+                 input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
+                 cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0,
+                 message_count INTEGER DEFAULT 0, api_call_count INTEGER DEFAULT 0,
+                 estimated_cost_usd REAL, actual_cost_usd REAL, cost_status TEXT,
+                 cwd TEXT, title TEXT, tool_call_count INTEGER NOT NULL DEFAULT 0,
+                 archived INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE messages (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 session_id TEXT NOT NULL, role TEXT, content TEXT,
+                 tool_calls TEXT, timestamp REAL NOT NULL,
+                 active INTEGER NOT NULL DEFAULT 1
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions
+                (id, source, model, started_at, ended_at, end_reason,
+                 input_tokens, output_tokens, message_count, api_call_count,
+                 cwd, title, tool_call_count, archived)
+             VALUES ('root','cli','fugu-ultra',1000.0,1100.0,'compression',
+                 120000,6000,1,12,
+                 '/work/warden',NULL,1,0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions
+                (id, source, model, parent_session_id, started_at, ended_at, end_reason,
+                 input_tokens, output_tokens, message_count, api_call_count,
+                 cwd, title, tool_call_count, archived)
+             VALUES ('child','cli','fugu-ultra','root',1110.0,NULL,NULL,
+                 90000,12000,0,8,
+                 NULL,NULL,0,0)",
+            [],
+        )
+        .unwrap();
+        path
+    }
+
+    fn hermes_tool_call(name: &str, args_json: &str) -> String {
+        let escaped = args_json.replace('"', "\\\"");
+        format!(r#"[{{"function": {{"name": "{name}", "arguments": "{escaped}"}}}}]"#)
+    }
+
     #[test]
     fn snapshot_includes_live_hermes_session_as_working() {
         let db = hermes_db("live", 1_000.0, 1_000.0); // last_event_at = 1_000_000 ms
@@ -812,6 +894,51 @@ mod tests {
             .find(|s| s.id == "herm-1")
             .expect("newest open session stays while the daemon is alive");
         assert!(matches!(found.status, Status::Working));
+    }
+
+    #[test]
+    fn hermes_activity_cache_refreshes_when_child_session_logs_change() {
+        let db = hermes_family_db("child-cache");
+        let collector = Collector::with_hermes_db(db.clone(), DEFAULT_ACTIVE_WINDOW_MS);
+        let now = 1_120_000;
+
+        let first = collector.snapshot_with(now, &HashMap::new(), &HashMap::new(), Some(4321));
+        let root = first.iter().find(|s| s.id == "root").expect("root shown");
+        assert!(
+            root.recent_files.is_empty(),
+            "fixture starts without child activity"
+        );
+
+        let call = hermes_tool_call("terminal", r#"{"command": "cargo test --lib hermes"}"#);
+        Connection::open(&db)
+            .unwrap()
+            .execute(
+                "INSERT INTO messages (session_id, role, content, tool_calls, timestamp, active)
+                 VALUES ('child','assistant','running focused tests', ?1, 1120.0, 1)",
+                rusqlite::params![call],
+            )
+            .unwrap();
+        Connection::open(&db)
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET message_count = 1, tool_call_count = 1 WHERE id = 'child'",
+                [],
+            )
+            .unwrap();
+
+        let second =
+            collector.snapshot_with(now + 1_000, &HashMap::new(), &HashMap::new(), Some(4321));
+        let root = second
+            .iter()
+            .find(|s| s.id == "root")
+            .expect("root still shown");
+        assert!(
+            root.recent_files
+                .iter()
+                .any(|event| event.path.contains("cargo test --lib hermes")),
+            "root activity should refresh when a related child session logs a tool call: {:?}",
+            root.recent_files
+        );
     }
 
     #[test]

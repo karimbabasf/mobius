@@ -25,12 +25,15 @@ When these disagree, treat the design spec as the product source of truth, then 
 
 - Tauri v2 + Vite/TypeScript app launches and shows **live** local agents.
 - The collector reads real logs: Claude Code (`~/.claude/projects`) fully, Codex
-  (`~/.codex` and the isolated `~/.codex-karim` profile) best-effort. Cursor is deferred.
+  (`~/.codex` and the isolated `~/.codex-karim` profile) best-effort, and Hermes/Fugu
+  from `~/.hermes/state.db`. Cursor is deferred.
 - `get_sessions` returns `Collector::snapshot(now)`: currently-active sessions (by file
-  mtime) with tokens (in/out/cache), model, branch, a derived name + full session id, live
-  status, and a file-activity log. The webview polls every 1.5s and reconciles cards.
+  mtime/liveness/process scan) with tokens (in/out/cache), model, branch, provider-sourced
+  title when available, full session id, run/process/activity panels, and info hovers.
+  The webview polls every 1.5s and reconciles cards.
 - No dollar cost — token counts only. Observe-only. See `docs/DECISIONS.md`.
-- Tests: `cargo test` (26) and `npm test` (10) green; `tsc` clean.
+- Tests: `cargo test --lib` (104 passing, 2 ignored) and focused Vitest card/main tests
+  (23 passing) green in the latest pass; `npm run build` is part of final verification.
 - `docs/ARCHITECTURE.md` maps the structure; `docs/KANBAN.md` tracks the slices.
 
 ## Product Goal
@@ -61,7 +64,7 @@ Everything gets normalized into one shared shape called `AgentSession`.
 That shape includes:
 
 - `id`: stable session id
-- `tool`: Claude, Codex, or Cursor
+- `tool`: Claude, Codex, Cursor, Hermes, or a generic detected agent
 - `pid`: process id when known
 - `project_path`: repo or working folder
 - `branch`: git branch
@@ -70,7 +73,10 @@ That shape includes:
 - `current_action`: one-line description of what the agent is doing
 - `started_at` and `last_event_at`: timestamps
 - `tokens`: input, output, cache
-- `cost_usd`: dollar estimate when possible
+- `title`: provider-sourced title only, otherwise absent
+- `run`: Hermes/Fugu run counters when available
+- `process_tree`: matched OS process tree when available
+- `connection_role`: Hermes orchestrator/sub-agent relationship when available
 
 ## Development Style
 
@@ -138,6 +144,13 @@ Keep this file short. Link to detailed docs instead of copying everything here.
 ### 2026-06-19 - Project brain and Kanban created
 
 - Added this living context file so future chats can quickly understand the project.
+
+### 2026-06-23 - Real agent names and activity help
+
+- MOBIUS now treats provider titles as the only real names; missing titles render as
+  provider + session id.
+- Expanded cards have info hovers for session, run, process, capacity, and activity.
+- Hermes/Fugu orchestrator/sub-agent relationships are included in the shared session shape.
 - Added `docs/KANBAN.md` to track implementation as vertical slices.
 - Recorded the decision to build vertically in `docs/DECISIONS.md`.
 

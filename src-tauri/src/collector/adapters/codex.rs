@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::collector::adapters::claude::{action_phrase, basename, classify_bash, file_mtime_ms};
+use crate::collector::adapters::claude::{action_phrase, classify_bash, file_mtime_ms};
 use crate::collector::context::{self, OccupancyRaw, SegmentAccumulator};
 use crate::collector::session::{
     AgentSession, Compaction, ContextCategory, ContextSnapshot, FileAction, FileEvent, LimitSource,
@@ -174,7 +174,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
         id,
         tool: Tool::Codex,
         pid: None,
-        title: Some(basename(&project_path)),
+        title: None,
         project_path,
         branch: None,
         model,
@@ -187,6 +187,9 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
         title_source: TitleSource::Fallback,
         can_rename: false,
         recent_files: files,
+        parent_session_id: None,
+        connection_role: None,
+        child_count: 0,
         run: None,
         process_tree: None,
         untracked: false,
@@ -361,6 +364,9 @@ mod tests {
         assert_eq!(s.tokens.input, 111);
         assert_eq!(s.tokens.output, 22);
         assert_eq!(s.tokens.cache, 33);
+        assert!(s.title.is_none());
+        assert!(matches!(s.title_source, TitleSource::Fallback));
+        assert!(!s.can_rename);
     }
 
     #[test]

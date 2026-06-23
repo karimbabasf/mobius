@@ -40,8 +40,8 @@ use serde_json::Value;
 
 use crate::collector::context::{self, OccupancyRaw, SegmentAccumulator};
 use crate::collector::session::{
-    AgentSession, ContextCategory, ContextWindow, FileAction, FileEvent, LimitSource, RunStats,
-    Status, TitleSource, Tokens, Tool,
+    AgentSession, ConnectionRole, ContextCategory, ContextWindow, FileAction, FileEvent,
+    LimitSource, RunStats, Status, TitleSource, Tokens, Tool,
 };
 
 /// Output-token ceiling for a no-work probe/greeting. A canned probe reply
@@ -51,6 +51,12 @@ use crate::collector::session::{
 /// it has logged a tool call or earned a title.
 const PROBE_OUTPUT_CEILING: i64 = 200;
 
+#[derive(Clone, Debug, Default)]
+struct SessionLink {
+    parent: Option<String>,
+    cwd: Option<String>,
+}
+
 /// Read all local Hermes coding sessions from the state DB (read-only).
 /// Returns an empty vec if the DB is missing or unreadable.
 pub fn snapshot_sessions(db_path: &Path) -> Vec<AgentSession> {
@@ -58,6 +64,7 @@ pub fn snapshot_sessions(db_path: &Path) -> Vec<AgentSession> {
         Ok(conn) => conn,
         Err(_) => return Vec::new(),
     };
+    let (links, children) = session_links(&conn);
 
     let mut stmt = match conn.prepare(
         "SELECT s.id, s.title, s.model, s.cwd, s.started_at, s.ended_at, \
@@ -68,7 +75,7 @@ pub fn snapshot_sessions(db_path: &Path) -> Vec<AgentSession> {
                 s.end_reason, s.model_config, \
                 (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = s.id) \
          FROM sessions s \
-         WHERE s.source = 'cli' AND s.cwd IS NOT NULL AND s.cwd <> '' AND s.archived = 0 \
+         WHERE s.source = 'cli' AND s.archived = 0 \
            AND (s.tool_call_count > 0 OR s.title IS NOT NULL OR s.output_tokens > ?1) \
          ORDER BY s.started_at DESC",
     ) {
@@ -77,6 +84,20 @@ pub fn snapshot_sessions(db_path: &Path) -> Vec<AgentSession> {
     };
 
     let rows = stmt.query_map([PROBE_OUTPUT_CEILING], |row| {
+        let id = row.get::<_, String>(0)?;
+        let row_cwd = row.get::<_, Option<String>>(3)?;
+        let Some(project_path) = resolve_project_path(&id, row_cwd.as_deref(), &links) else {
+            return Ok(None);
+        };
+        let parent_session_id = links.get(&id).and_then(|link| link.parent.clone());
+        let child_count = descendant_count(&id, &children);
+        let connection_role = if parent_session_id.is_some() {
+            Some(ConnectionRole::SubAgent)
+        } else if child_count > 0 {
+            Some(ConnectionRole::Orchestrator)
+        } else {
+            None
+        };
         let run = build_run_stats(
             row.get::<_, Option<i64>>(10)?.unwrap_or(0),
             row.get::<_, Option<i64>>(11)?.unwrap_or(0),
@@ -87,11 +108,11 @@ pub fn snapshot_sessions(db_path: &Path) -> Vec<AgentSession> {
             row.get::<_, Option<String>>(16)?,
             row.get::<_, Option<String>>(17)?,
         );
-        Ok(build_session(
-            row.get::<_, String>(0)?,
+        Ok(Some(build_session(
+            id,
             row.get::<_, Option<String>>(1)?,
             row.get::<_, Option<String>>(2)?,
-            row.get::<_, String>(3)?,
+            project_path,
             row.get::<_, f64>(4)?,
             row.get::<_, Option<f64>>(5)?,
             row.get::<_, Option<i64>>(6)?.unwrap_or(0),
@@ -99,14 +120,108 @@ pub fn snapshot_sessions(db_path: &Path) -> Vec<AgentSession> {
             row.get::<_, Option<i64>>(8)?.unwrap_or(0),
             row.get::<_, Option<i64>>(9)?.unwrap_or(0),
             row.get::<_, Option<f64>>(18)?,
+            parent_session_id,
+            connection_role,
+            child_count,
             run,
-        ))
+        )))
     });
 
     match rows {
-        Ok(iter) => iter.filter_map(Result::ok).collect(),
+        Ok(iter) => iter.filter_map(Result::ok).flatten().collect(),
         Err(_) => Vec::new(),
     }
+}
+
+fn session_links(
+    conn: &Connection,
+) -> (HashMap<String, SessionLink>, HashMap<String, Vec<String>>) {
+    let mut stmt =
+        match conn.prepare("SELECT id, parent_session_id, model_config, cwd FROM sessions WHERE source = 'cli' AND archived = 0")
+        {
+            Ok(stmt) => stmt,
+            Err(_) => return (HashMap::new(), HashMap::new()),
+        };
+    let rows = match stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return (HashMap::new(), HashMap::new()),
+    };
+
+    let mut links = HashMap::new();
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows.flatten() {
+        let (id, parent, model_config, cwd) = row;
+        let parent = parent
+            .filter(|p| !p.trim().is_empty())
+            .or_else(|| delegate_from(model_config.as_deref()));
+        if let Some(parent) = parent.as_ref() {
+            children.entry(parent.clone()).or_default().push(id.clone());
+        }
+        links.insert(
+            id,
+            SessionLink {
+                parent,
+                cwd: cwd.filter(|c| !c.trim().is_empty()),
+            },
+        );
+    }
+    (links, children)
+}
+
+fn resolve_project_path(
+    id: &str,
+    row_cwd: Option<&str>,
+    links: &HashMap<String, SessionLink>,
+) -> Option<String> {
+    if let Some(cwd) = row_cwd.filter(|cwd| !cwd.trim().is_empty()) {
+        return Some(cwd.to_string());
+    }
+
+    let mut seen = HashSet::new();
+    let mut current = id.to_string();
+    while seen.insert(current.clone()) {
+        let Some(link) = links.get(&current) else {
+            break;
+        };
+        if let Some(cwd) = link.cwd.as_ref() {
+            return Some(cwd.clone());
+        }
+        let Some(parent) = link.parent.as_ref() else {
+            break;
+        };
+        current = parent.clone();
+    }
+    None
+}
+
+fn descendant_count(id: &str, children: &HashMap<String, Vec<String>>) -> u32 {
+    let mut count = 0u32;
+    let mut seen = HashSet::new();
+    let mut queue: VecDeque<String> = children
+        .get(id)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    while let Some(child) = queue.pop_front() {
+        if !seen.insert(child.clone()) {
+            continue;
+        }
+        count += 1;
+        if let Some(kids) = children.get(&child) {
+            for kid in kids {
+                queue.push_back(kid.clone());
+            }
+        }
+    }
+    count
 }
 
 fn secs_to_ms(secs: f64) -> i64 {
@@ -176,7 +291,7 @@ fn build_session(
     id: String,
     title: Option<String>,
     model: Option<String>,
-    cwd: String,
+    project_path: String,
     started_at: f64,
     ended_at: Option<f64>,
     input: i64,
@@ -184,6 +299,9 @@ fn build_session(
     cache_read: i64,
     cache_write: i64,
     last_msg: Option<f64>,
+    parent_session_id: Option<String>,
+    connection_role: Option<ConnectionRole>,
+    child_count: u32,
     run: RunStats,
 ) -> AgentSession {
     let last_secs = last_msg.or(ended_at).unwrap_or(started_at);
@@ -195,7 +313,7 @@ fn build_session(
         id,
         tool: Tool::Hermes,
         pid: None,
-        project_path: cwd,
+        project_path,
         branch: None,
         model,
         status: Status::Idle,
@@ -212,6 +330,9 @@ fn build_session(
         title_source,
         can_rename: false,
         recent_files: Vec::new(),
+        parent_session_id,
+        connection_role,
+        child_count,
         run: Some(run),
         process_tree: None,
         untracked: false,
@@ -224,6 +345,31 @@ fn build_session(
 pub struct HermesActivity {
     pub context: Option<ContextWindow>,
     pub recent_files: Vec<FileEvent>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HermesActivityVersion {
+    pub message_count: u32,
+    pub last_message_at: i64,
+    pub tool_message_count: u32,
+}
+
+pub fn activity_version(conn: &Connection, session_id: &str) -> HermesActivityVersion {
+    let session_ids = related_session_ids(conn, session_id);
+    let placeholders = vec!["?"; session_ids.len()].join(",");
+    let sql = format!(
+        "SELECT COUNT(*), COALESCE(MAX(timestamp), 0), \
+                COALESCE(SUM(CASE WHEN tool_calls IS NOT NULL AND tool_calls <> '' THEN 1 ELSE 0 END), 0) \
+         FROM messages WHERE session_id IN ({placeholders})"
+    );
+    conn.query_row(&sql, params_from_iter(session_ids.iter()), |row| {
+        Ok(HermesActivityVersion {
+            message_count: row.get::<_, i64>(0)?.max(0) as u32,
+            last_message_at: secs_to_ms(row.get::<_, f64>(1)?),
+            tool_message_count: row.get::<_, i64>(2)?.max(0) as u32,
+        })
+    })
+    .unwrap_or_default()
 }
 
 /// Reconstruct one session's live context window and file activity from its
@@ -272,8 +418,8 @@ pub fn reconstruct_activity(
             row.get::<_, Option<String>>(0)?,           // role
             row.get::<_, Option<String>>(1)?,           // content
             row.get::<_, Option<String>>(2)?,           // tool_calls
-            row.get::<_, f64>(3)?,                       // timestamp (epoch secs)
-            row.get::<_, Option<i64>>(4)?.unwrap_or(1),  // active
+            row.get::<_, f64>(3)?,                      // timestamp (epoch secs)
+            row.get::<_, Option<i64>>(4)?.unwrap_or(1), // active
         ))
     });
     let rows = match rows {
@@ -530,6 +676,28 @@ mod tests {
         .unwrap();
     }
 
+    fn insert_cli_child(
+        conn: &Connection,
+        id: &str,
+        parent: &str,
+        started: f64,
+        cwd: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO sessions
+                (id, source, model, model_config, parent_session_id,
+                 started_at, ended_at, end_reason,
+                 input_tokens, output_tokens, message_count, tool_call_count,
+                 api_call_count, cwd, title, archived)
+             VALUES (?1,'cli','fugu-ultra',NULL,?2,
+                 ?3,NULL,NULL,
+                 90000,12000,0,0,
+                 8,?4,NULL,0)",
+            rusqlite::params![id, parent, started, cwd],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn returns_cli_session_with_mapped_fields() {
         let db = make_db("basic", |conn| {
@@ -695,6 +863,35 @@ mod tests {
             !ids.contains(&"probe".to_string()),
             "a tiny-output probe must stay hidden"
         );
+    }
+
+    #[test]
+    fn includes_subagent_rows_with_inherited_project_context() {
+        let db = make_db("subagent", |conn| {
+            conn.execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT", [])
+                .unwrap();
+            insert_cli_session(conn, "root", 1000.0, Some("/work/warden"));
+            insert_cli_child(conn, "child", "root", 1100.0, None);
+        });
+
+        let sessions = snapshot_sessions(&db);
+        let root = sessions.iter().find(|s| s.id == "root").unwrap();
+        let child = sessions
+            .iter()
+            .find(|s| s.id == "child")
+            .expect("token-burning Hermes child row should be a visible sub-agent");
+
+        assert_eq!(root.child_count, 1);
+        assert!(matches!(
+            root.connection_role,
+            Some(ConnectionRole::Orchestrator)
+        ));
+        assert_eq!(child.project_path, "/work/warden");
+        assert_eq!(child.parent_session_id.as_deref(), Some("root"));
+        assert!(matches!(
+            child.connection_role,
+            Some(ConnectionRole::SubAgent)
+        ));
     }
 
     #[test]
@@ -921,11 +1118,29 @@ mod tests {
             )
             .unwrap();
             let calls = [
-                (tool_call("read_file", r#"{"path": "/p/read.rs", "limit": 10}"#), 10.0),
-                (tool_call("write_file", r#"{"path": "/p/new.rs", "content": "x"}"#), 20.0),
-                (tool_call("patch", r#"{"path": "/p/edit.rs", "mode": "replace"}"#), 30.0),
-                (tool_call("search_files", r#"{"path": "/p", "pattern": "*.rs"}"#), 40.0),
-                (tool_call("terminal", r#"{"command": "cargo test --all --workspace --verbose --color=always"}"#), 50.0),
+                (
+                    tool_call("read_file", r#"{"path": "/p/read.rs", "limit": 10}"#),
+                    10.0,
+                ),
+                (
+                    tool_call("write_file", r#"{"path": "/p/new.rs", "content": "x"}"#),
+                    20.0,
+                ),
+                (
+                    tool_call("patch", r#"{"path": "/p/edit.rs", "mode": "replace"}"#),
+                    30.0,
+                ),
+                (
+                    tool_call("search_files", r#"{"path": "/p", "pattern": "*.rs"}"#),
+                    40.0,
+                ),
+                (
+                    tool_call(
+                        "terminal",
+                        r#"{"command": "cargo test --all --workspace --verbose --color=always"}"#,
+                    ),
+                    50.0,
+                ),
                 (tool_call("todo", r#"{"todos": []}"#), 60.0),
             ];
             for (i, (tc, ts)) in calls.iter().enumerate() {
@@ -942,7 +1157,12 @@ mod tests {
         let act = reconstruct_activity(&conn, "s1", Some("fugu-ultra"));
         // todo is skipped; the other five become events, newest first.
         assert_eq!(act.recent_files.len(), 5);
-        let by_path = |p: &str| act.recent_files.iter().find(|f| f.path.contains(p)).cloned();
+        let by_path = |p: &str| {
+            act.recent_files
+                .iter()
+                .find(|f| f.path.contains(p))
+                .cloned()
+        };
         assert!(matches!(
             by_path("read.rs").unwrap().action,
             FileAction::Reading
@@ -969,7 +1189,11 @@ mod tests {
             .find(|f| matches!(f.action, FileAction::Running))
             .unwrap();
         assert!(term.path.starts_with("cargo test"));
-        assert!(term.path.ends_with('…'), "long command truncated: {}", term.path);
+        assert!(
+            term.path.ends_with('…'),
+            "long command truncated: {}",
+            term.path
+        );
         // newest first
         assert_eq!(act.recent_files.first().unwrap().at, secs_to_ms(50.0));
     }
@@ -1027,7 +1251,10 @@ mod tests {
             println!("  {:?} {}", f.action, f.path);
         }
         assert!(ctx.used > 0);
-        assert!(!act.recent_files.is_empty(), "a tool-using session has files");
+        assert!(
+            !act.recent_files.is_empty(),
+            "a tool-using session has files"
+        );
     }
 
     #[test]

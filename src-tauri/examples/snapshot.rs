@@ -85,6 +85,12 @@ fn main() {
                 run.turns, cap, run.tool_calls, run.messages, run.effort, cost, run.end_reason,
             );
         }
+        if s.parent_session_id.is_some() || s.connection_role.is_some() || s.child_count > 0 {
+            println!(
+                "    connection: role={:?} parent={:?} children={}",
+                s.connection_role, s.parent_session_id, s.child_count
+            );
+        }
         for f in s.recent_files.iter().take(4) {
             println!("      {:?}  {}", f.action, f.path);
         }

@@ -73,13 +73,13 @@ describe("renderCard", () => {
 
   it("disables rename when the provider has no writable name field", () => {
     const html = renderCard(
-      session({ canRename: false, titleSource: "fallback", title: "project" }),
+      session({ canRename: false, titleSource: "fallback", title: null }),
       true,
     );
 
     expect(html).not.toContain("Rename actual chat");
-    expect(html).toContain("Name is read-only for this session");
-    expect(html).toContain("fallback");
+    expect(html).toContain("Provider title unavailable");
+    expect(html).toContain("Claude · f89686b4-e4df-4d13-8fab-90267a9d08c1");
   });
 
   it("includes the tool logo and the file activity log", () => {
@@ -111,10 +111,14 @@ describe("renderCard", () => {
     expect(codexHtml).not.toContain("agent-block__prompt");
   });
 
-  it("falls back to the folder name and shows an empty activity log", () => {
+  it("falls back to provider plus session id and shows an empty activity log", () => {
     const html = renderCard(session({ title: null, recentFiles: [] }), true);
 
-    expect(html).toContain("project");
+    expect(html).toContain(
+      '<span class="agent-block__name">Claude · f89686b4-e4df-4d13-8fab-90267a9d08c1</span>',
+    );
+    expect(html).not.toContain('<span class="agent-block__name">project</span>');
+    expect(html).toContain("provider title unavailable");
     expect(html).toContain("no activity recorded");
   });
 
@@ -183,6 +187,37 @@ describe("renderCard", () => {
     expect(html).toContain("33 calls");
   });
 
+  it("labels Hermes orchestrator and sub-agent connections", () => {
+    const orchestrator = renderCard(
+      session({
+        tool: "hermes",
+        model: "fugu-ultra",
+        connectionRole: "orchestrator",
+        childCount: 2,
+      }),
+      false,
+    );
+    expect(orchestrator).toContain('data-connection-role="orchestrator"');
+    expect(orchestrator).toContain("orchestrator");
+    expect(orchestrator).toContain("2 sub-agents");
+
+    const child = renderCard(
+      session({
+        id: "20260622_182940_8a25",
+        tool: "hermes",
+        model: "fugu-ultra",
+        title: null,
+        connectionRole: "subAgent",
+        parentSessionId: "20260622_181033_0e11",
+      }),
+      true,
+    );
+    expect(child).toContain('data-connection-role="subAgent"');
+    expect(child).toContain("Fugu sub-agent");
+    expect(child).toContain("parent");
+    expect(child).toContain("20260622_181");
+  });
+
   it("flags an untracked process card with a badge and data attribute", () => {
     const html = renderCard(
       session({
@@ -218,6 +253,38 @@ describe("renderCard", () => {
     expect(html).toContain("cargo build");
     expect(html).toContain('data-kill-session="proc:59421:200"');
     expect(html).toContain("Stop");
+  });
+
+  it("adds practical info hovers to every expanded section that renders", () => {
+    const html = renderCard(
+      session({
+        tool: "hermes",
+        model: "fugu-ultra",
+        run: {
+          turns: 44,
+          maxTurns: 150,
+          toolCalls: 63,
+          messages: 110,
+          effort: "medium",
+          costUsd: 0.42,
+          costStatus: "unknown",
+          endReason: "compression",
+        },
+        processTree: {
+          pid: 59421,
+          command: "/Users/x/.hermes/v/bin/hermes -z build",
+          children: [],
+        },
+      }),
+      true,
+    );
+
+    expect(html.match(/class="info-tip"/g)?.length).toBe(5);
+    expect(html).toContain("This is the provider title MOBIUS read from the agent");
+    expect(html).toContain("Shows autonomous run progress");
+    expect(html).toContain("Shows the live OS process tree");
+    expect(html).toContain("Shows token usage and context-window pressure");
+    expect(html).toContain("Shows recent files and commands touched by the agent");
   });
 
   it("omits the process panel and Stop control when there is no tree", () => {

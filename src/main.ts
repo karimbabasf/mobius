@@ -254,6 +254,7 @@ export async function handleSessionGridSubmit(
   const session = latest.get(sessionId);
   if (session) {
     session.title = newTitle;
+    session.titleSource = "provider";
     const wrapper = wrappers.get(sessionId);
     if (wrapper) {
       paint(wrapper, session);

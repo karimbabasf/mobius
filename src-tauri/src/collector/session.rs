@@ -132,6 +132,13 @@ pub enum FileAction {
     Searching,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectionRole {
+    Orchestrator,
+    SubAgent,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileEvent {
@@ -199,6 +206,16 @@ pub struct AgentSession {
     pub title_source: TitleSource,
     pub can_rename: bool,
     pub recent_files: Vec<FileEvent>,
+    /// Parent session row for providers that split one visible run into multiple
+    /// local connections. Hermes/Fugu uses this for sub-agent rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    /// User-facing role inside a provider connection family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_role: Option<ConnectionRole>,
+    /// Descendant sub-agent rows under this session. Zero is omitted from JSON.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub child_count: u32,
     /// Run-level telemetry (Hermes/Fugu). `None` for Claude/Codex and omitted
     /// from the JSON payload when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -212,6 +229,10 @@ pub struct AgentSession {
     /// found that has no session card of its own ("running without me knowing").
     #[serde(default)]
     pub untracked: bool,
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 impl AgentSession {
@@ -252,6 +273,9 @@ mod tests {
                 action: FileAction::Editing,
                 at: 1000,
             }],
+            parent_session_id: None,
+            connection_role: None,
+            child_count: 0,
             run: None,
             process_tree: None,
             untracked: false,

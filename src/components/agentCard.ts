@@ -30,12 +30,89 @@ const statusLabels: Record<Status, string> = {
   dead: "dead",
 };
 
-function renderRenameControl(session: AgentSession, name: string): string {
-  if (!session.canRename) {
+function shortId(id: string, chars = 12): string {
+  return id.length <= chars ? id : id.slice(0, chars);
+}
+
+function modelFamily(model: string | null | undefined): string {
+  const value = model?.toLowerCase() ?? "";
+  if (value.includes("fugu")) {
+    return "Fugu";
+  }
+  return "Hermes";
+}
+
+function fallbackName(session: AgentSession): string {
+  if (session.tool === "hermes" && session.connectionRole === "subAgent") {
+    return `${modelFamily(session.model)} sub-agent`;
+  }
+  if (session.tool === "hermes" && session.connectionRole === "orchestrator") {
+    return `${modelFamily(session.model)} orchestrator`;
+  }
+  return `${toolLabels[session.tool]} · ${session.id}`;
+}
+
+function titleStatus(session: AgentSession): string {
+  if (providerTitle(session)) {
+    return "real name";
+  }
+  return "provider title unavailable";
+}
+
+function infoTip(text: string): string {
+  return `<span class="info-tip" tabindex="0" aria-label="${escapeHtml(
+    text,
+  )}"><span aria-hidden="true">i</span><span class="info-tip__bubble" role="tooltip">${escapeHtml(
+    text,
+  )}</span></span>`;
+}
+
+function panelHeading(label: string, tip: string): string {
+  return `<h3><span>${escapeHtml(label)}</span>${infoTip(tip)}</h3>`;
+}
+
+function connectionLabel(session: AgentSession): string | null {
+  if (session.tool !== "hermes" || !session.connectionRole) {
+    return null;
+  }
+  if (session.connectionRole === "subAgent") {
+    return "sub-agent";
+  }
+  const count = session.childCount ?? 0;
+  if (count > 0) {
+    const noun = count === 1 ? "sub-agent" : "sub-agents";
+    return `orchestrator · ${count} ${noun}`;
+  }
+  return "orchestrator";
+}
+
+function renderConnectionBadge(session: AgentSession): string {
+  const label = connectionLabel(session);
+  if (!label || !session.connectionRole) {
+    return "";
+  }
+  return `<span class="agent-block__connection" data-connection-role="${escapeHtml(
+    session.connectionRole,
+  )}">${escapeHtml(label)}</span>`;
+}
+
+function providerTitle(session: AgentSession): string | null {
+  const title = session.title?.trim();
+  if (session.titleSource === "provider" && title) {
+    return title;
+  }
+  return null;
+}
+
+function renderRenameControl(session: AgentSession, realTitle: string | null): string {
+  if (!session.canRename || !realTitle) {
+    const value = realTitle ?? "Provider title unavailable";
+    const note = realTitle ? "Read-only provider title" : "Provider title unavailable";
     return `
       <div class="rename-box rename-box--readonly">
-        <span class="rename-box__label">name</span>
-        <span>Name is read-only for this session</span>
+        <span class="rename-box__label">provider title</span>
+        <span>${escapeHtml(note)}</span>
+        <strong>${escapeHtml(value)}</strong>
       </div>
     `;
   }
@@ -47,7 +124,7 @@ function renderRenameControl(session: AgentSession, name: string): string {
         id="rename-${escapeHtml(session.id)}"
         class="rename-box__input"
         name="newTitle"
-        value="${escapeHtml(name)}"
+        value="${escapeHtml(realTitle)}"
         autocomplete="off"
       />
       <button class="rename-box__button" type="submit">Rename actual chat</button>
@@ -98,7 +175,7 @@ export function renderRunPanel(session: AgentSession): string {
 
   return `
     <section class="agent-block__panel agent-block__panel--run">
-      <h3>run</h3>
+      ${panelHeading("run", "Shows autonomous run progress")}
       <div class="run-outcome" data-state="${escapeHtml(outcome.state)}">
         <i class="run-outcome__dot" aria-hidden="true"></i>
         <span>${escapeHtml(outcome.label)}</span>
@@ -136,7 +213,7 @@ export function renderProcessPanel(session: AgentSession): string {
     pidCount > 1 ? `Stop process tree (${pidCount})` : "Stop process";
   return `
     <section class="agent-block__panel agent-block__panel--process">
-      <h3>process</h3>
+      ${panelHeading("process", "Shows the live OS process tree")}
       ${renderProcessTree(tree)}
       <button
         class="process-kill"
@@ -164,7 +241,8 @@ function inferredAction(session: AgentSession): string {
  * Codex, and Cursor sessions can be scanned before reading session details.
  */
 export function renderCard(session: AgentSession, expanded: boolean): string {
-  const name = session.title ?? basename(session.projectPath);
+  const realTitle = providerTitle(session);
+  const name = realTitle ?? fallbackName(session);
   const project = basename(session.projectPath);
   const branch = session.branch ?? "—";
   const model = session.model ?? "unknown model";
@@ -172,11 +250,15 @@ export function renderCard(session: AgentSession, expanded: boolean): string {
   const live = session.status === "working";
   const pid = session.pid != null ? `pid ${session.pid}` : "pid —";
   const expandedClass = expanded ? " agent-block--expanded" : "";
-  const titleSource = session.titleSource === "provider" ? "real name" : "fallback";
+  const titleSource = titleStatus(session);
   const untracked = session.untracked === true;
+  const connection = connectionLabel(session);
+  const parentId = session.parentSessionId ? shortId(session.parentSessionId) : null;
 
   return `
-    <article class="agent-block${expandedClass}" data-tool="${session.tool}" data-provider="${session.tool}" data-status="${session.status}" data-untracked="${untracked}">
+    <article class="agent-block${expandedClass}" data-tool="${session.tool}" data-provider="${session.tool}" data-status="${session.status}" data-untracked="${untracked}" data-connection-role="${escapeHtml(
+      session.connectionRole ?? "",
+    )}">
       <button
         class="agent-block__head"
         type="button"
@@ -197,10 +279,10 @@ export function renderCard(session: AgentSession, expanded: boolean): string {
         <span class="agent-block__identity">
           <span class="agent-block__tool"><span>${escapeHtml(
             toolLabels[session.tool],
-          )}</span><i>${escapeHtml(titleSource)}</i></span>
+          )}</span><i>${escapeHtml(titleSource)}</i>${renderConnectionBadge(session)}</span>
           <span class="agent-block__name">${escapeHtml(name)}</span>
           ${
-            session.canRename
+            session.canRename && realTitle
               ? `<span class="agent-block__rename-hint"><i aria-hidden="true">✎</i>click to rename</span>`
               : ""
           }
@@ -222,21 +304,29 @@ export function renderCard(session: AgentSession, expanded: boolean): string {
         <div class="agent-block__body-inner">
           <div class="agent-block__expanded-grid">
             <section class="agent-block__panel agent-block__panel--session">
-              <h3>session</h3>
-              ${renderRenameControl(session, name)}
+              ${panelHeading("session", "This is the provider title MOBIUS read from the agent")}
+              ${renderRenameControl(session, realTitle)}
               <div class="agent-block__details">
                 <span><b>project</b>${escapeHtml(project)}</span>
                 <span><b>branch</b>${escapeHtml(branch)}</span>
                 <span><b>model</b>${escapeHtml(model)}</span>
                 <span><b>process</b>${escapeHtml(pid)}</span>
-                <span><b>title</b>${escapeHtml(session.titleSource)}</span>
+                <span><b>provider title</b>${escapeHtml(
+                  realTitle ? "available" : "provider title unavailable",
+                )}</span>
+                ${
+                  connection
+                    ? `<span><b>connection</b>${escapeHtml(connection)}</span>`
+                    : ""
+                }
+                ${parentId ? `<span><b>parent</b>${escapeHtml(parentId)}</span>` : ""}
               </div>
               <span class="agent-block__id">${escapeHtml(session.id)}</span>
             </section>
             ${renderRunPanel(session)}
             ${renderProcessPanel(session)}
             <section class="agent-block__panel agent-block__panel--capacity">
-              <h3>capacity</h3>
+              ${panelHeading("capacity", "Shows token usage and context-window pressure")}
               <dl class="token-row">
                 <div><dt>in</dt><dd>${formatTokens(session.tokens.input)}</dd></div>
                 <div><dt>out</dt><dd>${formatTokens(session.tokens.output)}</dd></div>
@@ -245,7 +335,7 @@ export function renderCard(session: AgentSession, expanded: boolean): string {
               ${renderContextDetail(session.context)}
             </section>
             <section class="agent-block__panel agent-block__panel--activity">
-              <h3>activity</h3>
+              ${panelHeading("activity", "Shows recent files and commands touched by the agent")}
               <div class="log">
                 <div class="log__head">
                   <span>live activity</span>

@@ -190,11 +190,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
     let id = id?;
     let project_path = cwd.unwrap_or_default();
     let can_rename = ai_title.as_ref().is_some_and(|s| !s.trim().is_empty());
-    let (title, title_source) = derive_title(
-        ai_title.as_deref().or(summary.as_deref()),
-        slug.as_deref(),
-        &project_path,
-    );
+    let (title, title_source) = derive_title(ai_title.as_deref().or(summary.as_deref()));
     let current_action = files.last().map(action_phrase);
 
     files.reverse();
@@ -231,10 +227,13 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
         last_event_at: when,
         tokens,
         context: Some(context_window),
-        title: Some(title),
+        title,
         title_source,
         can_rename,
         recent_files: files,
+        parent_session_id: None,
+        connection_role: None,
+        child_count: 0,
         run: None,
         process_tree: None,
         untracked: false,
@@ -333,29 +332,15 @@ fn result_text(content: Option<&Value>) -> String {
     }
 }
 
-fn dekebab(slug: &str) -> String {
-    slug.trim().replace('-', " ")
-}
-
-/// Pick a human-readable session name: provider title -> slug -> folder.
-fn derive_title(
-    provider_title: Option<&str>,
-    slug: Option<&str>,
-    project_path: &str,
-) -> (String, TitleSource) {
+/// Pick the real provider title when one exists; otherwise leave title absent.
+fn derive_title(provider_title: Option<&str>) -> (Option<String>, TitleSource) {
     if let Some(s) = provider_title {
         let s = s.trim();
         if !s.is_empty() {
-            return (truncate(s, 64), TitleSource::Provider);
+            return (Some(truncate(s, 64)), TitleSource::Provider);
         }
     }
-    if let Some(sl) = slug {
-        let d = dekebab(sl);
-        if !d.is_empty() {
-            return (d, TitleSource::Fallback);
-        }
-    }
-    (basename(project_path), TitleSource::Fallback)
+    (None, TitleSource::Fallback)
 }
 
 /// First whitespace-delimited token of a redirect target, ignoring fd dups (`>&1`).
@@ -494,7 +479,7 @@ mod tests {
         assert_eq!(s.tokens.input, 300);
         assert_eq!(s.tokens.output, 60);
         assert_eq!(s.tokens.cache, 120);
-        assert_eq!(s.title.as_deref(), Some("proj"));
+        assert!(s.title.is_none());
         assert!(matches!(s.title_source, TitleSource::Fallback));
         assert!(!s.can_rename);
         assert!(matches!(s.tool, Tool::Claude));
@@ -603,7 +588,7 @@ mod tests {
     #[test]
     fn parse_without_provider_title_falls_back_to_slug_not_first_prompt() {
         let s = parse_session(&fixture("sess-basic.jsonl")).unwrap();
-        assert_eq!(s.title.as_deref(), Some("proj"));
+        assert!(s.title.is_none());
         assert!(matches!(s.title_source, TitleSource::Fallback));
         assert!(!s.can_rename);
     }
@@ -631,20 +616,16 @@ mod tests {
 
         assert!(rename_ai_title(&path, "Should not write").is_err());
         let parsed = parse_session(&path).unwrap();
-        assert_eq!(parsed.title.as_deref(), Some("proj"));
+        assert!(parsed.title.is_none());
     }
 
     #[test]
     fn derive_title_follows_precedence_without_prompt_fallback() {
         assert_eq!(
-            derive_title(Some("Real title"), Some("a-b"), "/x/proj").0,
-            "Real title"
+            derive_title(Some("Real title")).0.as_deref(),
+            Some("Real title")
         );
-        assert_eq!(
-            derive_title(None, Some("my-cool-thing"), "/x/proj").0,
-            "my cool thing"
-        );
-        assert_eq!(derive_title(None, None, "/x/proj").0, "proj");
+        assert!(derive_title(None).0.is_none());
     }
 
     #[test]

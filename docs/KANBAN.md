@@ -17,6 +17,8 @@ Vertical slices: each ships fixture → backend → UI → tests → docs.
   scans `~/.codex/sessions` too.
 - **AMC-070** — Docs pass (this file, ARCHITECTURE, DECISIONS, PROJECT_CONTEXT) + live
   verification.
+- **AMC-080** — Real provider-title naming, rename only for writable provider titles,
+  expanded-card info hovers, and Hermes run/process/sub-agent visibility.
 
 ## Backlog
 

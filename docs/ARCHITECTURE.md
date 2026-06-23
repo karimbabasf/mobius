@@ -14,13 +14,17 @@ mobius/
 │       │   ├── adapters/
 │       │   │   ├── mod.rs
 │       │   │   ├── claude.rs     ~/.claude/projects/**/*.jsonl -> AgentSession
-│       │   │   └── codex.rs      ~/.codex rollout + session_index -> AgentSession
+│       │   │   ├── codex.rs      ~/.codex rollout + session_index -> AgentSession
+│       │   │   └── hermes.rs     ~/.hermes/state.db -> AgentSession + run/activity
+│       │   ├── scanner.rs        OS process scanner -> process trees
 │       │   ├── registry.rs       in-memory registry (kept, not wired in v1)
 │       │   └── session.rs        AgentSession / Tokens / FileEvent / FileAction model
 │       └── lib.rs               Tauri setup; get_sessions -> Collector::snapshot
 ├── src/
 │   ├── components/
-│   │   ├── agentCard.ts          one session card (logo, name, id, tokens, file log)
+│   │   ├── agentCard.ts          session card (real title, run/process/activity/help)
+│   │   ├── contextGauge.ts       compact context pressure display
+│   │   ├── processTree.ts        process tree renderer + kill plan helper
 │   │   ├── fileLog.ts            file-activity list with status tags
 │   │   ├── toolLogo.ts           per-tool SVG mark
 │   │   ├── topBar.ts             active / working / total-tokens metrics
@@ -37,37 +41,48 @@ mobius/
 ```text
 ~/.claude/projects/**/*.jsonl  ─┐
 ~/.codex/sessions/**/*.jsonl    ├─►  Collector::snapshot(now)
-~/.codex/session_index.jsonl  ──┘      • scan files modified within the active window
-                                       • parse each via its adapter (cache by mtime)
-                                       • apply liveness from mtime
-                                       • override Codex titles with thread_name
+~/.codex/session_index.jsonl    │       • scan files modified within the active window
+~/.hermes/state.db              ┘       • parse each via its adapter (cache by mtime)
+                                       • apply liveness from mtime/process scan
+                                       • attach real provider titles, run data, process trees
    ►  Vec<AgentSession>  (serde camelCase)
    ►  get_sessions  Tauri command (polled every 1.5s by the webview)
-   ►  main.ts keyed reconciler  ►  top metrics + agent cards + live file logs
+   ►  main.ts keyed reconciler  ►  top metrics + agent cards + run/process/activity panels
 ```
 
 ## Module Responsibilities
 
 - `collector/session.rs`: shared `AgentSession`, `Tool`, `Status`, `Tokens`, `FileEvent`,
-  `FileAction` model. Serialized camelCase for the UI.
+  `FileAction`, `RunStats`, process tree, and Hermes connection metadata. Serialized
+  camelCase for the UI.
 - `collector/adapters/claude.rs`: pure `parse_session(path)` for a Claude Code log —
   tokens, model, branch, file-activity log, current action, and a derived title.
 - `collector/adapters/codex.rs`: best-effort `parse_session(path)` for a Codex rollout
   log, plus `load_thread_names(index)` for the session id → name join. Scanned across
   every Codex home — `~/.codex` and isolated profiles like `~/.codex-karim`.
-- `collector/mod.rs`: `Collector` scans the Claude tree and every Codex home, caches
-  parsed sessions by file mtime, computes live status, merges, and sorts newest-first.
+- `collector/adapters/hermes.rs`: read-only SQLite adapter for Hermes/Fugu sessions,
+  including run telemetry, child/sub-agent relationships, and lazy activity reconstruction.
+- `collector/mod.rs`: `Collector` scans the Claude tree and every Codex home, reads Hermes,
+  caches parsed sessions by file mtime, computes live status, merges process trees, and
+  sorts newest-first.
 - `lib.rs`: Tauri app; exposes `get_sessions` returning `Collector::snapshot(now)`.
-- `src/components/*`: pure string renderers (card, file log, tool logo, top bar).
+- `src/components/*`: pure string renderers (card, file log, process tree, context gauge,
+  tool logo, top bar).
 - `src/main.ts`: polls `get_sessions` and reconciles cards by session id so new agents
   animate in and existing cards update in place.
 
-## Liveness & naming
+## Liveness, Naming, And Activity
 
 - Status from file mtime: `working` < 90s, `idle` < 10 min, hidden afterwards. This is
   what produces the "black screen until an agent is running" behaviour.
-- Session name: Claude = summary → first real prompt → slug → project folder; Codex =
-  `thread_name` → project folder.
+- Session name: only provider-sourced titles count. Claude = `aiTitle`/summary, Codex =
+  `thread_name`, Hermes = `sessions.title`. If missing, the UI renders provider + session
+  id and labels the provider title as unavailable.
+- Expanded cards show run telemetry, matched process trees, context capacity, and recent
+  file/command activity. Each section header has a small info hover explaining what the
+  section means and how to use it.
+- Hermes parent/child rows become orchestrator/sub-agent metadata; child rows inherit the
+  parent project path when Hermes leaves `cwd` empty.
 
 ## Planned / not in v1
 

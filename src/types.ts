@@ -115,6 +115,9 @@ export interface AgentSession {
   titleSource: "provider" | "fallback";
   canRename: boolean;
   recentFiles: FileEvent[];
+  parentSessionId?: string | null;
+  connectionRole?: "orchestrator" | "subAgent" | null;
+  childCount?: number;
   run?: RunStats | null;
   /** Live process subtree, present when the scanner matched this agent. */
   processTree?: ProcessNode | null;
