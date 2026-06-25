@@ -132,6 +132,27 @@ function renderRenameControl(session: AgentSession, realTitle: string | null): s
   `;
 }
 
+function renderPromptPanel(session: AgentSession): string {
+  const prompt = session.firstPrompt?.trim();
+  const hasPrompt = Boolean(prompt);
+  const visible = hasPrompt ? prompt! : "first prompt unavailable";
+  return `
+    <section class="agent-block__panel agent-block__panel--prompt">
+      ${panelHeading("first prompt", "Shows the original user assignment Mobius found in the provider log")}
+      <div class="prompt-card" data-empty="${hasPrompt ? "false" : "true"}">
+        <p>${escapeHtml(visible)}</p>
+        ${
+          hasPrompt
+            ? `<details class="prompt-card__raw"><summary>reveal full prompt</summary><code>${escapeHtml(
+                prompt!,
+              )}</code></details>`
+            : ""
+        }
+      </div>
+    </section>
+  `;
+}
+
 /** Human label + state class for a Hermes run's `endReason`. */
 function runOutcome(endReason: string | null): { label: string; state: string } {
   switch (endReason) {
@@ -304,7 +325,7 @@ export function renderCard(session: AgentSession, expanded: boolean): string {
         <div class="agent-block__body-inner">
           <div class="agent-block__expanded-grid">
             <section class="agent-block__panel agent-block__panel--session">
-              ${panelHeading("session", "This is the provider title MOBIUS read from the agent")}
+              ${panelHeading("session", "This is the provider title Mobius read from the agent")}
               ${renderRenameControl(session, realTitle)}
               <div class="agent-block__details">
                 <span><b>project</b>${escapeHtml(project)}</span>
@@ -323,6 +344,7 @@ export function renderCard(session: AgentSession, expanded: boolean): string {
               </div>
               <span class="agent-block__id">${escapeHtml(session.id)}</span>
             </section>
+            ${renderPromptPanel(session)}
             ${renderRunPanel(session)}
             ${renderProcessPanel(session)}
             <section class="agent-block__panel agent-block__panel--capacity">

@@ -10,6 +10,15 @@ const actionLabels: Record<FileAction, string> = {
   searching: "search",
 };
 
+const nowLabels: Record<FileAction, string> = {
+  reading: "reading now",
+  writing: "changing now",
+  editing: "changing now",
+  appending: "changing now",
+  running: "running now",
+  searching: "searching now",
+};
+
 function visibleName(event: FileEvent): string {
   if (event.action === "running") {
     return "shell command";
@@ -47,7 +56,9 @@ export function renderFileLog(events: FileEvent[], live: boolean): string {
       const isNow = live && index === 0;
       const rowClass = isNow ? "log__row log__row--now" : "log__row log__row--past";
       const nowMarker = isNow
-        ? `<span class="log__live-pulse" aria-label="Live now"><i aria-hidden="true"></i>Live now</span>`
+        ? `<span class="log__live-pulse" aria-label="${escapeHtml(
+            nowLabels[event.action],
+          )}"><i aria-hidden="true"></i>${escapeHtml(nowLabels[event.action])}</span>`
         : "";
       return `<li class="${rowClass}">
         <span class="log__tag log__tag--${event.action}">${escapeHtml(label)}</span>

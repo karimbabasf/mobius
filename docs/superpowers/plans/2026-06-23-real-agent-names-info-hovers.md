@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - No `git push`, `gh pr create`, or MR/PR creation without Karim explicitly saying to push or open the PR in the current message.
-- Rename is allowed only when MOBIUS can write back to a provider real-title source.
+- Rename is allowed only when Mobius can write back to a provider real-title source.
 - Fallback project/folder names must not be shown as agent names.
 - Tooltips must work on hover and keyboard focus.
 

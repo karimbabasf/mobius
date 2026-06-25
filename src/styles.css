@@ -843,9 +843,60 @@ dd {
   background: rgba(15, 24, 19, 0.6);
 }
 
+.agent-block__panel--prompt {
+  grid-column: span 2;
+  border-color: rgba(132, 169, 255, 0.3);
+  background: rgba(12, 17, 25, 0.62);
+}
+
 .agent-block__panel--activity {
   grid-column: span 2;
   min-height: 360px;
+}
+
+.prompt-card {
+  display: grid;
+  gap: 8px;
+}
+
+.prompt-card p {
+  max-height: 9.5rem;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt-card[data-empty="true"] p {
+  color: var(--dim);
+  font-style: italic;
+}
+
+.prompt-card__raw {
+  color: var(--dim);
+  font-size: 0.68rem;
+}
+
+.prompt-card__raw summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.prompt-card__raw code {
+  display: block;
+  max-height: 220px;
+  margin-top: 6px;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid rgba(93, 105, 99, 0.38);
+  background: rgba(3, 4, 4, 0.6);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .run-outcome {
@@ -1613,8 +1664,12 @@ dd {
     grid-template-columns: 1fr;
   }
 
+  .agent-block__panel--prompt,
   .agent-block__panel--activity {
     grid-column: auto;
+  }
+
+  .agent-block__panel--activity {
     min-height: 300px;
   }
 

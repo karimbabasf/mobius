@@ -1,4 +1,4 @@
-# Hermes Adapter for MOBIUS — Design
+# Hermes Adapter for Mobius — Design
 
 **Date:** 2026-06-22
 **Status:** Approved (pending implementation plan)
@@ -6,14 +6,14 @@
 
 ## Goal
 
-Add a third local-agent adapter to MOBIUS — **Hermes** (Nous Research's
+Add a third local-agent adapter to Mobius — **Hermes** (Nous Research's
 desktop agent app) — alongside the existing Claude and Codex adapters, so
 Hermes coding sessions appear as agent cards in the dashboard with correct,
 live information.
 
 ## Background
 
-MOBIUS is a live local-agent dashboard (Tauri v2). It detects running AI
+Mobius is a live local-agent dashboard (Tauri v2). It detects running AI
 coding agents by reading their local session data:
 
 - **Claude:** one process + one JSONL file per session under
@@ -51,7 +51,7 @@ archived INTEGER DEFAULT 0
 timestamp REAL, token_count, ...`.
 
 Timestamps (`started_at`, `ended_at`, `messages.timestamp`) are **epoch
-seconds (float)**. MOBIUS uses **milliseconds since epoch** — convert.
+seconds (float)**. Mobius uses **milliseconds since epoch** — convert.
 
 Real data sample (this machine): 7 sessions, all `source='cli'`, model
 `fugu-ultra`, `cwd=/Users/karimbaba`, auto-generated titles, 1 active
@@ -62,7 +62,7 @@ platform handoffs (`handoff_platform`), but none present yet.
 
 **Surface only `source='cli'` sessions with a non-null `cwd`.** Hermes is
 multi-surface (Telegram/Discord/Slack/WhatsApp/Email/CLI); restricting to CLI
-sessions with a working directory keeps MOBIUS a focused local-coding-agent
+sessions with a working directory keeps Mobius a focused local-coding-agent
 dashboard, consistent with Claude/Codex. Other sources are ignored in v1.
 
 ## Design
@@ -88,7 +88,7 @@ branch — it does not change how the Claude/Codex adapters work.
   dependency, deterministic build).
 - Open with `OpenFlags::SQLITE_OPEN_READ_ONLY`. WAL mode means our reads never
   block Hermes's writes and vice-versa.
-- **Strictly read-only.** MOBIUS never writes to Hermes's live DB. Consequence:
+- **Strictly read-only.** Mobius never writes to Hermes's live DB. Consequence:
   no rename support for Hermes in v1 (`can_rename = false`). Writing `title`
   into a daemon-owned WAL DB risks conflicts/corruption and is not worth it.
 

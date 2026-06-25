@@ -15,6 +15,7 @@ tests/*
 !tests/fixtures/
 coverage/
 .superpowers/
+.playwright-mcp/
 
 # Cline client artifacts
 cline-skills/

@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(match_tool("cargo run --example snapshot"), None);
         assert_eq!(match_tool("node /app/server.js"), None);
         assert_eq!(
-            match_tool("/Applications/MOBIUS.app/Contents/MacOS/MOBIUS"),
+            match_tool("/Applications/Mobius.app/Contents/MacOS/Mobius"),
             None
         );
         assert_eq!(match_tool(""), None);

@@ -16,6 +16,7 @@ function session(partial: Partial<AgentSession> = {}): AgentSession {
     lastEventAt: 0,
     tokens: { input: 1200, output: 320, cache: 640 },
     context: null,
+    firstPrompt: null,
     title: "Build a local agent tracker",
     titleSource: "provider",
     canRename: true,
@@ -90,6 +91,27 @@ describe("renderCard", () => {
     expect(html).toContain("live activity");
     expect(html).toContain("log__tag--editing");
     expect(html).toContain("main.ts");
+  });
+
+  it("renders the first prompt in an expanded prompt panel", () => {
+    const html = renderCard(
+      session({
+        firstPrompt: "My Hermes sub-agents aren't getting tracked. Show what each one is doing.",
+      }),
+      true,
+    );
+
+    expect(html).toContain("agent-block__panel--prompt");
+    expect(html).toContain("first prompt");
+    expect(html).toContain("My Hermes sub-agents aren&#39;t getting tracked");
+    expect(html).toContain("Show what each one is doing.");
+  });
+
+  it("shows an unavailable prompt fallback when the provider has no first prompt", () => {
+    const html = renderCard(session({ firstPrompt: null }), true);
+
+    expect(html).toContain("agent-block__panel--prompt");
+    expect(html).toContain("first prompt unavailable");
   });
 
   it("renders clear provider badges without the old shell prompt sigil", () => {
@@ -279,8 +301,9 @@ describe("renderCard", () => {
       true,
     );
 
-    expect(html.match(/class="info-tip"/g)?.length).toBe(5);
-    expect(html).toContain("This is the provider title MOBIUS read from the agent");
+    expect(html.match(/class="info-tip"/g)?.length).toBe(6);
+    expect(html).toContain("This is the provider title Mobius read from the agent");
+    expect(html).toContain("Shows the original user assignment Mobius found in the provider log");
     expect(html).toContain("Shows autonomous run progress");
     expect(html).toContain("Shows the live OS process tree");
     expect(html).toContain("Shows token usage and context-window pressure");

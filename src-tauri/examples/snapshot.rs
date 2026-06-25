@@ -71,6 +71,11 @@ fn main() {
                 println!("      breakdown: {}", cats.join(" "));
             }
         }
+        if let Some(prompt) = &s.first_prompt {
+            let preview: String = prompt.chars().take(140).collect();
+            let suffix = if prompt.chars().count() > 140 { "…" } else { "" };
+            println!("    first prompt: {preview}{suffix}");
+        }
         if let Some(run) = &s.run {
             let cost = run
                 .cost_usd

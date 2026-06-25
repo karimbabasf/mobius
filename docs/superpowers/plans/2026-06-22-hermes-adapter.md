@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a third local-agent adapter — Hermes (Nous Research's desktop agent) — so its local CLI coding sessions appear as live agent cards in MOBIUS alongside Claude and Codex.
+**Goal:** Add a third local-agent adapter — Hermes (Nous Research's desktop agent) — so its local CLI coding sessions appear as live agent cards in Mobius alongside Claude and Codex.
 
 **Architecture:** Hermes runs one long-lived daemon that records every session in a single SQLite DB at `~/.hermes/state.db` (WAL mode). Unlike the per-file Claude/Codex adapters, Hermes is read with one **read-only** SQL query that returns many sessions. The adapter does pure DB→`AgentSession` mapping; the collector applies daemon liveness, the recency window, and the working/idle split — exactly as it does for Codex. A single daemon PID (found via `pgrep`) gates all Hermes cards.
 
@@ -12,7 +12,7 @@
 
 - **Read-only access to Hermes data.** Never write to `~/.hermes/state.db`. Consequence: Hermes sessions are `can_rename = false`.
 - **Surface only `source='cli'` sessions with a non-empty `cwd`** (and `archived = 0`). Other Hermes surfaces (Telegram/Discord/etc.) are out of scope.
-- **Timestamps in the DB are epoch *seconds* (float).** MOBIUS uses **milliseconds**. Convert every timestamp.
+- **Timestamps in the DB are epoch *seconds* (float).** Mobius uses **milliseconds**. Convert every timestamp.
 - **Degrade gracefully:** a missing/unreadable DB, absent `pgrep`, or non-Unix target must yield no Hermes cards, never an error or panic.
 - **`rusqlite` pinned with the `bundled` feature** (compiles SQLite in; no system dependency).
 - Follow existing adapter/collector patterns; do not restructure Claude/Codex code.

@@ -65,6 +65,7 @@ mod tests {
                 cache: 640,
             },
             context: None,
+            first_prompt: None,
             title: Some("demo".into()),
             title_source: TitleSource::Provider,
             can_rename: false,

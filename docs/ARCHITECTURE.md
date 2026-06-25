@@ -1,4 +1,4 @@
-# MOBIUS Architecture
+# Mobius Architecture
 
 ## Current Shape
 
@@ -56,7 +56,8 @@ mobius/
   `FileAction`, `RunStats`, process tree, and Hermes connection metadata. Serialized
   camelCase for the UI.
 - `collector/adapters/claude.rs`: pure `parse_session(path)` for a Claude Code log —
-  tokens, model, branch, file-activity log, current action, and a derived title.
+  tokens, model, branch, first prompt, file-activity log, current action, and a
+  derived title.
 - `collector/adapters/codex.rs`: best-effort `parse_session(path)` for a Codex rollout
   log, plus `load_thread_names(index)` for the session id → name join. Scanned across
   every Codex home — `~/.codex` and isolated profiles like `~/.codex-karim`.
@@ -78,9 +79,9 @@ mobius/
 - Session name: only provider-sourced titles count. Claude = `aiTitle`/summary, Codex =
   `thread_name`, Hermes = `sessions.title`. If missing, the UI renders provider + session
   id and labels the provider title as unavailable.
-- Expanded cards show run telemetry, matched process trees, context capacity, and recent
-  file/command activity. Each section header has a small info hover explaining what the
-  section means and how to use it.
+- Expanded cards show first prompt, run telemetry, matched process trees, context
+  capacity, and recent file/command activity. Each section header has a small info
+  hover explaining what the section means and how to use it.
 - Hermes parent/child rows become orchestrator/sub-agent metadata; child rows inherit the
   parent project path when Hermes leaves `cwd` empty.
 

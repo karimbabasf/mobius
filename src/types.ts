@@ -111,6 +111,7 @@ export interface AgentSession {
   lastEventAt: number;
   tokens: Tokens;
   context: ContextWindow | null;
+  firstPrompt: string | null;
   title: string | null;
   titleSource: "provider" | "fallback";
   canRename: boolean;

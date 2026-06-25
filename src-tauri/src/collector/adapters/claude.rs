@@ -30,6 +30,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
     let mut slug: Option<String> = None;
     let mut summary: Option<String> = None;
     let mut ai_title: Option<String> = None;
+    let mut first_prompt: Option<String> = None;
     let mut tokens = Tokens::default();
     let mut files: Vec<FileEvent> = Vec::new();
 
@@ -117,6 +118,9 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
 
         let is_user = event.get("type").and_then(|v| v.as_str()) == Some("user");
         if let Some(message) = event.get("message") {
+            if is_user && first_prompt.is_none() {
+                first_prompt = first_prompt_from_claude_content(message.get("content"));
+            }
             if let Some(found) = message.get("model").and_then(|v| v.as_str()) {
                 model = Some(found.to_string());
             }
@@ -227,6 +231,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
         last_event_at: when,
         tokens,
         context: Some(context_window),
+        first_prompt,
         title,
         title_source,
         can_rename,
@@ -310,6 +315,40 @@ fn segment_for_text(text: &str, is_user: bool) -> ContextCategory {
         ContextCategory::Memory
     } else {
         ContextCategory::Conversation
+    }
+}
+
+/// First real user text from a Claude message. Tool-result user messages are
+/// provider plumbing, not the assignment Karim typed.
+fn first_prompt_from_claude_content(content: Option<&Value>) -> Option<String> {
+    let raw = match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => {
+            let mut out = String::new();
+            for block in blocks {
+                if block.get("type").and_then(|v| v.as_str()) != Some("text") {
+                    continue;
+                }
+                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(text);
+                }
+            }
+            out
+        }
+        _ => String::new(),
+    };
+    clean_prompt(raw)
+}
+
+fn clean_prompt(raw: String) -> Option<String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
     }
 }
 
@@ -483,6 +522,10 @@ mod tests {
         assert!(matches!(s.title_source, TitleSource::Fallback));
         assert!(!s.can_rename);
         assert!(matches!(s.tool, Tool::Claude));
+        assert_eq!(
+            s.first_prompt.as_deref(),
+            Some("Add a retry helper with backoff")
+        );
     }
 
     #[test]
@@ -581,6 +624,10 @@ mod tests {
         assert!(s.can_rename);
         assert_ne!(
             s.title.as_deref(),
+            Some("This is the first prompt and should not be the agent name")
+        );
+        assert_eq!(
+            s.first_prompt.as_deref(),
             Some("This is the first prompt and should not be the agent name")
         );
     }

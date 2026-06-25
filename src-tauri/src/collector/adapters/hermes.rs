@@ -326,6 +326,7 @@ fn build_session(
             cache: (cache_read.max(0) + cache_write.max(0)) as u64,
         },
         context: None,
+        first_prompt: None,
         title,
         title_source,
         can_rename: false,
@@ -344,6 +345,7 @@ fn build_session(
 #[derive(Clone, Debug, Default)]
 pub struct HermesActivity {
     pub context: Option<ContextWindow>,
+    pub first_prompt: Option<String>,
     pub recent_files: Vec<FileEvent>,
 }
 
@@ -432,9 +434,13 @@ pub fn reconstruct_activity(
         seg.push(ContextCategory::SystemInstructions, sys);
     }
     let mut files: Vec<FileEvent> = Vec::new();
+    let mut first_prompt: Option<String> = None;
 
     for (role, content, tool_calls, ts, active) in rows.flatten() {
         let at = secs_to_ms(ts);
+        if first_prompt.is_none() && role.as_deref() == Some("user") {
+            first_prompt = content.as_deref().and_then(clean_user_prompt);
+        }
 
         // File/command touches: extracted from every assistant tool call, whether
         // or not the message is still in context.
@@ -467,7 +473,20 @@ pub fn reconstruct_activity(
 
     HermesActivity {
         context: build_context(&seg, model),
+        first_prompt,
         recent_files: files,
+    }
+}
+
+fn clean_user_prompt(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty()
+        || text.starts_with("[CONTEXT COMPACTION")
+        || text.starts_with("[Your active task list")
+    {
+        None
+    } else {
+        Some(text.to_string())
     }
 }
 
@@ -1007,6 +1026,10 @@ mod tests {
         });
         let conn = Connection::open(&db).unwrap();
         let act = reconstruct_activity(&conn, "s1", Some("fugu-ultra"));
+        assert_eq!(
+            act.first_prompt.as_deref(),
+            Some("please refactor the parser for me today")
+        );
         let ctx = act.context.expect("context reconstructed");
         assert!(ctx.used > 0, "tokenized occupancy should be positive");
         assert_eq!(ctx.limit, Some(1_000_000), "Fugu window is 1M");

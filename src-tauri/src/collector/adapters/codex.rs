@@ -26,6 +26,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
     let mut id: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut model: Option<String> = None;
+    let mut first_prompt: Option<String> = None;
     let mut tokens = Tokens::default();
     let mut files: Vec<FileEvent> = Vec::new();
 
@@ -133,6 +134,11 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
                         }
                         Some("message") => {
                             let text = message_text(p.get("content"));
+                            if first_prompt.is_none()
+                                && p.get("role").and_then(|v| v.as_str()) == Some("user")
+                            {
+                                first_prompt = clean_prompt(&text);
+                            }
                             let cat = if text.contains("AGENTS.md") {
                                 ContextCategory::Memory
                             } else {
@@ -184,6 +190,7 @@ pub fn parse_session(path: &Path) -> Option<AgentSession> {
         last_event_at: when,
         tokens,
         context: Some(context_window),
+        first_prompt,
         title_source: TitleSource::Fallback,
         can_rename: false,
         recent_files: files,
@@ -319,6 +326,18 @@ fn message_text(content: Option<&Value>) -> String {
     out
 }
 
+fn clean_prompt(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty()
+        || (text.starts_with("# AGENTS.md instructions") && text.contains("<environment_context>"))
+        || text.starts_with("<environment_context>")
+    {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
 /// Best-effort token extraction from a `token_count` payload's `info` object.
 fn add_tokens(tokens: &mut Tokens, info: &Value) {
     let source = info
@@ -354,6 +373,14 @@ mod tests {
         dir.join("session_index.jsonl")
     }
 
+    fn temp_rollout_path(name: &str, content: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mobius-{}-{}", name, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout.jsonl");
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
     #[test]
     fn parse_extracts_codex_fields() {
         let s = parse_session(&fixture("rollout-sample.jsonl")).expect("should parse");
@@ -367,6 +394,25 @@ mod tests {
         assert!(s.title.is_none());
         assert!(matches!(s.title_source, TitleSource::Fallback));
         assert!(!s.can_rename);
+    }
+
+    #[test]
+    fn parse_extracts_first_user_prompt_when_rollout_contains_one() {
+        let path = temp_rollout_path(
+            "codex-first-prompt",
+            r##"{"timestamp":"2026-06-19T16:33:45.869Z","type":"session_meta","payload":{"id":"codex-prompt","cwd":"/Users/demo/proj"}}
+{"timestamp":"2026-06-19T16:33:45.900Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\n\n<INSTRUCTIONS>\nKeep changes small.\n</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>\n  <cwd>/Users/demo/proj</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-06-19T16:33:46.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Track every local agent and highlight file changes"}]}}
+{"timestamp":"2026-06-19T16:33:47.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect the project."}]}}
+"##,
+        );
+
+        let s = parse_session(&path).expect("should parse");
+
+        assert_eq!(
+            s.first_prompt.as_deref(),
+            Some("Track every local agent and highlight file changes")
+        );
     }
 
     #[test]

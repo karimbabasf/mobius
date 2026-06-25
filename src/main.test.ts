@@ -25,6 +25,7 @@ function session(id: string, title: string): AgentSession {
     lastEventAt: 0,
     tokens: { input: 10, output: 5, cache: 0 },
     context: null,
+    firstPrompt: null,
     title,
     titleSource: "provider",
     canRename: true,

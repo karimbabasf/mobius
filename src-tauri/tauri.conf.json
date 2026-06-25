@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MOBIUS",
+  "productName": "Mobius",
   "version": "0.1.0",
   "identifier": "com.karimbaba.mobius",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "MOBIUS",
+        "title": "Mobius",
         "width": 1120,
         "height": 720,
         "minWidth": 920,

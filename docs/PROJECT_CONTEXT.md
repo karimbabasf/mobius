@@ -1,11 +1,11 @@
-# MOBIUS Project Context
+# Mobius Project Context
 
 > Living context file for future agents and future chats.
 > Update this file every time the project direction, architecture, ticket plan, or implementation state changes.
 
 ## Quick Read
 
-MOBIUS is a macOS desktop app for seeing all local AI coding agents in one place: Claude Code, Codex, and Cursor.
+Mobius is a macOS desktop app for seeing all local AI coding agents in one place: Claude Code, Codex, and Cursor.
 
 In plain English: it is a live dashboard for "what are my coding agents doing right now?"
 
@@ -29,11 +29,12 @@ When these disagree, treat the design spec as the product source of truth, then 
   from `~/.hermes/state.db`. Cursor is deferred.
 - `get_sessions` returns `Collector::snapshot(now)`: currently-active sessions (by file
   mtime/liveness/process scan) with tokens (in/out/cache), model, branch, provider-sourced
-  title when available, full session id, run/process/activity panels, and info hovers.
+  title when available, first prompt when recoverable, full session id,
+  run/process/activity panels, and info hovers.
   The webview polls every 1.5s and reconciles cards.
 - No dollar cost — token counts only. Observe-only. See `docs/DECISIONS.md`.
-- Tests: `cargo test --lib` (104 passing, 2 ignored) and focused Vitest card/main tests
-  (23 passing) green in the latest pass; `npm run build` is part of final verification.
+- Tests: `cargo test --lib` (107 passing, 2 ignored) and Vitest UI tests
+  (42 passing) green in the latest pass; `npm run build` is part of final verification.
 - `docs/ARCHITECTURE.md` maps the structure; `docs/KANBAN.md` tracks the slices.
 
 ## Product Goal
@@ -147,12 +148,30 @@ Keep this file short. Link to detailed docs instead of copying everything here.
 
 ### 2026-06-23 - Real agent names and activity help
 
-- MOBIUS now treats provider titles as the only real names; missing titles render as
+- Mobius now treats provider titles as the only real names; missing titles render as
   provider + session id.
 - Expanded cards have info hovers for session, run, process, capacity, and activity.
 - Hermes/Fugu orchestrator/sub-agent relationships are included in the shared session shape.
 - Added `docs/KANBAN.md` to track implementation as vertical slices.
 - Recorded the decision to build vertically in `docs/DECISIONS.md`.
+
+### 2026-06-22 - Keep every open Hermes family visible
+
+- Fixed Hermes visibility so every still-open session family stays tracked while the
+  Hermes daemon is running, instead of only the newest open main session.
+- Verified against the real local `~/.hermes/state.db`: the snapshot grew from 3
+  active cards to 16, including older Hermes sub-agent rows with parent/child metadata.
+
+### 2026-06-23 - First prompts and clearer live work
+
+- Added `firstPrompt` to the shared session payload and best-effort extraction for
+  Claude, Codex, and Hermes. Codex skips injected AGENTS/environment wrapper text
+  so the first prompt shown is the user request when the rollout has one.
+- Expanded cards now include a first-prompt panel and stronger live activity labels
+  like `changing now`, `running now`, `reading now`, and `searching now`.
+- The snapshot helper prints first-prompt previews; live verification showed the
+  active Codex card using Karim's Hermes tracking request and Hermes cards showing
+  their original WARDEN assignments.
 
 ### 2026-06-19 - AMC-040 fake session card implemented
 

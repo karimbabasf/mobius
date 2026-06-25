@@ -39,6 +39,7 @@ struct CacheEntry {
 struct HermesCacheEntry {
     activity_version: hermes::HermesActivityVersion,
     context: Option<ContextWindow>,
+    first_prompt: Option<String>,
     recent_files: Vec<FileEvent>,
 }
 
@@ -306,35 +307,39 @@ impl Collector {
         // here, consistent with the Codex branch above.
         if let (Some(db), Some(pid)) = (self.hermes_db.as_ref(), hermes_pid) {
             let raw = hermes::snapshot_sessions(db);
-            // Hermes runs one session at a time (the `--continue` model), and a
-            // Hermes process is alive right now (we're in the `Some(pid)` arm).
-            // The newest *still-open* session (no `end_reason` yet) is the one it
-            // is driving — exempt it from the recency window so a single long
-            // tool turn, during which neither messages nor token counters move,
-            // doesn't make the active agent vanish and resurface as a bare,
-            // telemetry-less process card.
+            // Hermes can leave several rows open: the current orchestrator plus
+            // older sub-agent families that are still attached to the live
+            // daemon. Exempt every open family from the recency window so silent
+            // long-running child work does not disappear behind a newer main
+            // session and resurface as a bare process card.
             let active_id = raw
                 .iter()
                 .filter(|s| s.run.as_ref().map_or(true, |r| r.end_reason.is_none()))
                 .max_by_key(|s| s.started_at)
                 .map(|s| s.id.clone());
-            let active_family = active_id
-                .as_deref()
-                .map(|id| hermes_ancestor_chain(id, &raw))
-                .unwrap_or_default();
+            let open_ids: HashSet<String> = raw
+                .iter()
+                .filter(|s| s.run.as_ref().map_or(true, |r| r.end_reason.is_none()))
+                .map(|s| s.id.clone())
+                .collect();
+            let open_families: HashSet<String> = open_ids
+                .iter()
+                .flat_map(|id| hermes_ancestor_chain(id, &raw))
+                .collect();
             for mut session in raw {
                 if !seen.insert(session.id.clone()) {
                     continue;
                 }
                 let age = now_ms - session.last_event_at;
                 let is_active = active_id.as_deref() == Some(session.id.as_str());
-                let is_active_family = active_family.contains(&session.id);
-                if age >= self.active_window_ms && !is_active_family {
+                let is_open_family = open_families.contains(&session.id);
+                if age >= self.active_window_ms && !is_open_family {
                     continue;
                 }
                 session.pid = Some(pid);
-                // The active session is what the live daemon is on, so it is
-                // working even between flushes; others fall back to recency.
+                // The newest open session is what the live daemon is driving
+                // right now; other open-but-silent rows stay visible and fall
+                // back to recency for their idle/working label.
                 session.status = if is_active {
                     Status::Working
                 } else {
@@ -393,12 +398,14 @@ impl Collector {
                     HermesCacheEntry {
                         activity_version,
                         context: activity.context,
+                        first_prompt: activity.first_prompt,
                         recent_files: activity.recent_files,
                     },
                 );
             }
             if let Some(entry) = cache.get(&session.id) {
                 session.context = entry.context.clone();
+                session.first_prompt = entry.first_prompt.clone();
                 session.recent_files = entry.recent_files.clone();
             }
         }
@@ -472,6 +479,7 @@ fn synthesize_untracked(root: &ProcessRoot, now_ms: i64) -> AgentSession {
         last_event_at: now_ms,
         tokens: Tokens::default(),
         context: None,
+        first_prompt: None,
         title: None,
         title_source: TitleSource::Fallback,
         can_rename: false,
@@ -894,6 +902,42 @@ mod tests {
             .find(|s| s.id == "herm-1")
             .expect("newest open session stays while the daemon is alive");
         assert!(matches!(found.status, Status::Working));
+    }
+
+    #[test]
+    fn hermes_keeps_every_open_session_family_visible_while_daemon_runs() {
+        let db = hermes_family_db("open-families");
+        Connection::open(&db)
+            .unwrap()
+            .execute(
+                "INSERT INTO sessions
+                    (id, source, model, started_at, ended_at, end_reason,
+                     input_tokens, output_tokens, message_count, api_call_count,
+                     cwd, title, tool_call_count, archived)
+                 VALUES ('current','cli','fugu-ultra',2000.0,NULL,NULL,
+                     260000,32000,1,42,
+                     '/work/warden',NULL,0,0)",
+                [],
+            )
+            .unwrap();
+
+        let collector = Collector::with_hermes_db(db, DEFAULT_ACTIVE_WINDOW_MS);
+        let now = 2_000_000 + 30 * 60 * 1000;
+        let sessions = collector.snapshot_with(now, &HashMap::new(), &HashMap::new(), Some(4321));
+        let ids: HashSet<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+
+        assert!(
+            ids.contains("current"),
+            "the newest open Hermes session should still be shown"
+        );
+        assert!(
+            ids.contains("child"),
+            "older open Hermes sub-agent rows should not disappear behind the newest main session"
+        );
+        assert!(
+            ids.contains("root"),
+            "ancestors of visible open sub-agents should stay visible for context"
+        );
     }
 
     #[test]

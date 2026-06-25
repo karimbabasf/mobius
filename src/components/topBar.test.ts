@@ -16,6 +16,7 @@ function session(partial: Partial<AgentSession>): AgentSession {
     lastEventAt: 0,
     tokens: { input: 0, output: 0, cache: 0 },
     context: null,
+    firstPrompt: null,
     title: null,
     titleSource: "fallback",
     canRename: false,

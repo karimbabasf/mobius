@@ -202,6 +202,10 @@ pub struct AgentSession {
     pub tokens: Tokens,
     #[serde(default)]
     pub context: Option<ContextWindow>,
+    /// First user assignment/prompt for the session, when the provider log
+    /// exposes it. This is best-effort and remains local/read-only.
+    #[serde(default)]
+    pub first_prompt: Option<String>,
     pub title: Option<String>,
     pub title_source: TitleSource,
     pub can_rename: bool,
@@ -265,6 +269,7 @@ mod tests {
             last_event_at: 1000,
             tokens: Tokens::default(),
             context: None,
+            first_prompt: None,
             title: Some("demo session".into()),
             title_source: TitleSource::Provider,
             can_rename: true,
@@ -382,6 +387,14 @@ mod tests {
             "run block must be omitted: {json}"
         );
         assert!(!json.contains("costUsd"), "cost was dropped: {json}");
+    }
+
+    #[test]
+    fn session_serializes_first_prompt_for_ui() {
+        let mut session = sample();
+        session.first_prompt = Some("Build the live agent dashboard".into());
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"firstPrompt\":\"Build the live agent dashboard\""));
     }
 
     #[test]
