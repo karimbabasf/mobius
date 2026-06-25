@@ -6,7 +6,7 @@ Short log of meaningful, hard-to-reverse choices. Newest first.
 
 - **Provider titles are the only agent names.** Claude `aiTitle`/summary, Codex
   `thread_name`, and Hermes `sessions.title` are real names. When none exists,
-  Mobius shows provider + session id instead of inventing a project/folder name.
+  MOBI board shows provider + session id instead of inventing a project/folder name.
 - **Rename only writes real provider titles.** The UI shows rename controls only
   when the backend can write back to the provider title source.
 - **Expanded cards explain themselves.** Every expanded section has an info hover

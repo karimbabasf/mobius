@@ -368,13 +368,13 @@ mod tests {
     }
 
     fn temp_index_path(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mobius-{}-{}", name, std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mobi-board-{}-{}", name, std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("session_index.jsonl")
     }
 
     fn temp_rollout_path(name: &str, content: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mobius-{}-{}", name, std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mobi-board-{}-{}", name, std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("rollout.jsonl");
         std::fs::write(&path, content).unwrap();

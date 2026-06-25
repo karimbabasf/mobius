@@ -1,9 +1,9 @@
-# Mobius Architecture
+# MOBI board Architecture
 
 ## Current Shape
 
 ```text
-mobius/
+mobi-board/
 ├── docs/                       ARCHITECTURE, PROJECT_CONTEXT, DECISIONS, KANBAN
 ├── src-tauri/
 │   ├── examples/snapshot.rs     dev helper: print the live snapshot get_sessions returns

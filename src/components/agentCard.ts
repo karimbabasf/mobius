@@ -138,7 +138,7 @@ function renderPromptPanel(session: AgentSession): string {
   const visible = hasPrompt ? prompt! : "first prompt unavailable";
   return `
     <section class="agent-block__panel agent-block__panel--prompt">
-      ${panelHeading("first prompt", "Shows the original user assignment Mobius found in the provider log")}
+      ${panelHeading("first prompt", "Shows the original user assignment MOBI board found in the provider log")}
       <div class="prompt-card" data-empty="${hasPrompt ? "false" : "true"}">
         <p>${escapeHtml(visible)}</p>
         ${
@@ -325,7 +325,7 @@ export function renderCard(session: AgentSession, expanded: boolean): string {
         <div class="agent-block__body-inner">
           <div class="agent-block__expanded-grid">
             <section class="agent-block__panel agent-block__panel--session">
-              ${panelHeading("session", "This is the provider title Mobius read from the agent")}
+              ${panelHeading("session", "This is the provider title MOBI board read from the agent")}
               ${renderRenameControl(session, realTitle)}
               <div class="agent-block__details">
                 <span><b>project</b>${escapeHtml(project)}</span>

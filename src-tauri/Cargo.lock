@@ -2064,7 +2064,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mobius"
+name = "mobi-board"
 version = "0.1.0"
 dependencies = [
  "dirs",

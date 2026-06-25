@@ -2,13 +2,13 @@
 
 ## Goal
 
-Mobius must display the provider's real chat/session title as the agent name. When that title is unavailable, the interface must avoid inventing a folder-based name and instead show a neutral provider plus session id identity.
+MOBI board must display the provider's real chat/session title as the agent name. When that title is unavailable, the interface must avoid inventing a folder-based name and instead show a neutral provider plus session id identity.
 
 ## Decisions
 
 - A real agent name is a provider-sourced title: Claude `aiTitle`/summary, Codex `thread_name`, or Hermes `sessions.title`.
 - Fallback titles must not masquerade as names. Backend fallback sessions should carry `title: null` where possible, and the frontend should render `Provider · session-id`.
-- Rename controls appear only when Mobius can write back to the provider's real title source. Current writable sources are Claude `aiTitle` and Codex `thread_name`.
+- Rename controls appear only when MOBI board can write back to the provider's real title source. Current writable sources are Claude `aiTitle` and Codex `thread_name`.
 - The expanded card should make title provenance explicit: real provider title when present, provider title unavailable when absent.
 - Every expanded card section needs a small circular info affordance that opens explanatory help on hover and keyboard focus.
 

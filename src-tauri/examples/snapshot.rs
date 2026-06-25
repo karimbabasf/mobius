@@ -1,8 +1,8 @@
 //! Dev helper: print the exact live snapshot the app's `get_sessions` returns.
 //! Run with: cargo run --example snapshot
 
-use mobius_lib::collector::scanner::ProcessNode;
-use mobius_lib::collector::Collector;
+use mobi_board_lib::collector::scanner::ProcessNode;
+use mobi_board_lib::collector::Collector;
 
 /// Print a process subtree as an indented list.
 fn print_tree(node: &ProcessNode, depth: usize) {

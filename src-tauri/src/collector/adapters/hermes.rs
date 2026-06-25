@@ -650,7 +650,7 @@ mod tests {
     /// to populate it. Returns the path.
     fn make_db(tag: &str, body: impl FnOnce(&Connection)) -> PathBuf {
         let path =
-            std::env::temp_dir().join(format!("mobius-hermes-{}-{}.db", std::process::id(), tag));
+            std::env::temp_dir().join(format!("mobi-board-hermes-{}-{}.db", std::process::id(), tag));
         let _ = std::fs::remove_file(&path);
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -962,7 +962,7 @@ mod tests {
 
     #[test]
     fn missing_db_returns_empty() {
-        let path = std::env::temp_dir().join("mobius-hermes-does-not-exist.db");
+        let path = std::env::temp_dir().join("mobi-board-hermes-does-not-exist.db");
         let _ = std::fs::remove_file(&path);
         assert!(snapshot_sessions(&path).is_empty());
     }
@@ -974,7 +974,7 @@ mod tests {
     /// `active` columns on messages.
     fn make_activity_db(tag: &str, body: impl FnOnce(&Connection)) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "mobius-hermes-act-{}-{}.db",
+            "mobi-board-hermes-act-{}-{}.db",
             std::process::id(),
             tag
         ));
@@ -1226,7 +1226,7 @@ mod tests {
         // The collector's older test DBs lack the columns we read; reconstruction
         // must degrade to empty, never panic or error.
         let path =
-            std::env::temp_dir().join(format!("mobius-hermes-min-{}.db", std::process::id()));
+            std::env::temp_dir().join(format!("mobi-board-hermes-min-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(

@@ -1,11 +1,11 @@
-# Mobius Project Context
+# MOBI board Project Context
 
 > Living context file for future agents and future chats.
 > Update this file every time the project direction, architecture, ticket plan, or implementation state changes.
 
 ## Quick Read
 
-Mobius is a macOS desktop app for seeing all local AI coding agents in one place: Claude Code, Codex, and Cursor.
+MOBI board is a macOS desktop app for seeing all local AI coding agents in one place: Claude Code, Codex, and Cursor.
 
 In plain English: it is a live dashboard for "what are my coding agents doing right now?"
 
@@ -13,8 +13,8 @@ The owner is Karim, who is a non-technical developer and vibe coder with crypto 
 
 ## Source Of Truth
 
-- Product design: `docs/superpowers/specs/2026-06-19-mobius-design.md`
-- Implementation plan: `docs/superpowers/plans/2026-06-19-mobius.md`
+- Product design: `docs/superpowers/specs/2026-06-19-mobi-board-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-06-19-mobi-board.md`
 - Ticket board: `docs/KANBAN.md`
 - Decision log: `docs/DECISIONS.md`
 - Architecture map, once implementation starts: `docs/ARCHITECTURE.md`
@@ -103,7 +103,7 @@ Example:
 Expected final layout:
 
 ```text
-mobius/
+mobi-board/
 ├── README.md
 ├── docs/
 │   ├── ARCHITECTURE.md
@@ -122,7 +122,7 @@ mobius/
 Runtime app data belongs outside the repo:
 
 ```text
-~/Library/Application Support/Mobius/
+~/Library/Application Support/MOBI board/
 ├── state.sqlite
 ├── logs/
 └── pricing-cache.json
@@ -148,7 +148,7 @@ Keep this file short. Link to detailed docs instead of copying everything here.
 
 ### 2026-06-23 - Real agent names and activity help
 
-- Mobius now treats provider titles as the only real names; missing titles render as
+- MOBI board now treats provider titles as the only real names; missing titles render as
   provider + session id.
 - Expanded cards have info hovers for session, run, process, capacity, and activity.
 - Hermes/Fugu orchestrator/sub-agent relationships are included in the shared session shape.

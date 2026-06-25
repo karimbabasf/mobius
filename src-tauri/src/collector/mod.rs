@@ -766,7 +766,7 @@ mod tests {
     fn hermes_db(tag: &str, started: f64, last_msg: f64) -> PathBuf {
         use rusqlite::Connection;
         let path = std::env::temp_dir().join(format!(
-            "mobius-collector-hermes-{}-{}.db",
+            "mobi-board-collector-hermes-{}-{}.db",
             std::process::id(),
             tag
         ));
@@ -806,7 +806,7 @@ mod tests {
 
     fn hermes_family_db(tag: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "mobius-collector-hermes-family-{}-{}.db",
+            "mobi-board-collector-hermes-family-{}-{}.db",
             std::process::id(),
             tag
         ));

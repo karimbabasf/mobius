@@ -503,7 +503,7 @@ mod tests {
     }
 
     fn temp_session_path(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mobius-{}-{}", name, std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mobi-board-{}-{}", name, std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("session.jsonl")
     }

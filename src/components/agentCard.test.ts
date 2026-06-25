@@ -302,8 +302,8 @@ describe("renderCard", () => {
     );
 
     expect(html.match(/class="info-tip"/g)?.length).toBe(6);
-    expect(html).toContain("This is the provider title Mobius read from the agent");
-    expect(html).toContain("Shows the original user assignment Mobius found in the provider log");
+    expect(html).toContain("This is the provider title MOBI board read from the agent");
+    expect(html).toContain("Shows the original user assignment MOBI board found in the provider log");
     expect(html).toContain("Shows autonomous run progress");
     expect(html).toContain("Shows the live OS process tree");
     expect(html).toContain("Shows token usage and context-window pressure");

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a third local-agent adapter — Hermes (Nous Research's desktop agent) — so its local CLI coding sessions appear as live agent cards in Mobius alongside Claude and Codex.
+**Goal:** Add a third local-agent adapter — Hermes (Nous Research's desktop agent) — so its local CLI coding sessions appear as live agent cards in MOBI board alongside Claude and Codex.
 
 **Architecture:** Hermes runs one long-lived daemon that records every session in a single SQLite DB at `~/.hermes/state.db` (WAL mode). Unlike the per-file Claude/Codex adapters, Hermes is read with one **read-only** SQL query that returns many sessions. The adapter does pure DB→`AgentSession` mapping; the collector applies daemon liveness, the recency window, and the working/idle split — exactly as it does for Codex. A single daemon PID (found via `pgrep`) gates all Hermes cards.
 
@@ -12,7 +12,7 @@
 
 - **Read-only access to Hermes data.** Never write to `~/.hermes/state.db`. Consequence: Hermes sessions are `can_rename = false`.
 - **Surface only `source='cli'` sessions with a non-empty `cwd`** (and `archived = 0`). Other Hermes surfaces (Telegram/Discord/etc.) are out of scope.
-- **Timestamps in the DB are epoch *seconds* (float).** Mobius uses **milliseconds**. Convert every timestamp.
+- **Timestamps in the DB are epoch *seconds* (float).** MOBI board uses **milliseconds**. Convert every timestamp.
 - **Degrade gracefully:** a missing/unreadable DB, absent `pgrep`, or non-Unix target must yield no Hermes cards, never an error or panic.
 - **`rusqlite` pinned with the `bundled` feature** (compiles SQLite in; no system dependency).
 - Follow existing adapter/collector patterns; do not restructure Claude/Codex code.
@@ -41,7 +41,7 @@ fn hermes_tool_serializes_lowercase() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd src-tauri && cargo test -p mobius_lib hermes_tool_serializes_lowercase`
+Run: `cd src-tauri && cargo test -p mobi-board hermes_tool_serializes_lowercase`
 Expected: FAIL to compile — `no variant named Hermes found for enum Tool`.
 
 - [ ] **Step 3: Add the variant**
@@ -61,7 +61,7 @@ pub enum Tool {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd src-tauri && cargo test -p mobius_lib hermes_tool_serializes_lowercase`
+Run: `cd src-tauri && cargo test -p mobi-board hermes_tool_serializes_lowercase`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -135,7 +135,7 @@ mod tests {
     /// temp files are fine to leave for the test run.
     fn make_db(tag: &str, body: impl FnOnce(&Connection)) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "mobius-hermes-{}-{}.db",
+            "mobi-board-hermes-{}-{}.db",
             std::process::id(),
             tag
         ));
@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn missing_db_returns_empty() {
-        let path = std::env::temp_dir().join("mobius-hermes-does-not-exist.db");
+        let path = std::env::temp_dir().join("mobi-board-hermes-does-not-exist.db");
         let _ = std::fs::remove_file(&path);
         assert!(snapshot_sessions(&path).is_empty());
     }
@@ -259,7 +259,7 @@ mod tests {
 
 - [ ] **Step 4: Run tests to verify they fail**
 
-Run: `cd src-tauri && cargo test -p mobius_lib collector::adapters::hermes`
+Run: `cd src-tauri && cargo test -p mobi-board collector::adapters::hermes`
 Expected: tests compile but FAIL (stub returns empty; `returns_cli_session_with_mapped_fields` panics on `expect("cli session present")`).
 
 - [ ] **Step 5: Implement the adapter**
@@ -380,7 +380,7 @@ fn build_session(
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `cd src-tauri && cargo test -p mobius_lib collector::adapters::hermes`
+Run: `cd src-tauri && cargo test -p mobi-board collector::adapters::hermes`
 Expected: all six tests PASS. (First run compiles bundled SQLite — may take a minute.)
 
 - [ ] **Step 7: Commit**
@@ -418,7 +418,7 @@ fn first_pid_picks_first_line_and_ignores_blanks() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd src-tauri && cargo test -p mobius_lib first_pid_picks_first_line_and_ignores_blanks`
+Run: `cd src-tauri && cargo test -p mobi-board first_pid_picks_first_line_and_ignores_blanks`
 Expected: FAIL to compile — `cannot find function first_pid`.
 
 - [ ] **Step 3: Implement**
@@ -456,7 +456,7 @@ fn first_pid(output: &str) -> Option<i32> {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd src-tauri && cargo test -p mobius_lib first_pid_picks_first_line_and_ignores_blanks`
+Run: `cd src-tauri && cargo test -p mobi-board first_pid_picks_first_line_and_ignores_blanks`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -485,7 +485,7 @@ Add to the `tests` module in `src-tauri/src/collector/mod.rs`. (These use `rusql
 fn hermes_db(tag: &str, started: f64, last_msg: f64) -> PathBuf {
     use rusqlite::Connection;
     let path = std::env::temp_dir().join(format!(
-        "mobius-collector-hermes-{}-{}.db",
+        "mobi-board-collector-hermes-{}-{}.db",
         std::process::id(),
         tag
     ));
@@ -556,7 +556,7 @@ fn snapshot_omits_hermes_session_aged_out_of_window() {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd src-tauri && cargo test -p mobius_lib collector::tests::snapshot_includes_live_hermes_session_as_working`
+Run: `cd src-tauri && cargo test -p mobi-board collector::tests::snapshot_includes_live_hermes_session_as_working`
 Expected: FAIL to compile — `no function with_hermes_db`, and `snapshot_with` takes 3 args not 4.
 
 - [ ] **Step 3: Import the adapter and liveness function**
@@ -747,7 +747,7 @@ Ensure the test module imports `Status` (it already imports `Tool` via `use crat
 
 - [ ] **Step 8: Run the full backend test suite**
 
-Run: `cd src-tauri && cargo test -p mobius_lib`
+Run: `cd src-tauri && cargo test -p mobi-board`
 Expected: PASS — all prior tests plus the three new Hermes collector tests.
 
 - [ ] **Step 9: Commit**
@@ -849,7 +849,7 @@ git commit -m "feat(ui): render Hermes as a third agent provider"
 
 - [ ] **Step 1: Confirm the full backend suite passes**
 
-Run: `cd src-tauri && cargo test -p mobius_lib`
+Run: `cd src-tauri && cargo test -p mobi-board`
 Expected: all PASS.
 
 - [ ] **Step 2: Observe a real Hermes session via the snapshot example**
